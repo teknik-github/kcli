@@ -11,7 +11,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"kcli/internal/k8s"
+	"github.com/teknik-github/kcli/internal/k8s"
 )
 
 const refreshInterval = 3 * time.Second

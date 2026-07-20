@@ -1,4 +1,4 @@
-module kcli
+module github.com/teknik-github/kcli
 
 go 1.26.4
 

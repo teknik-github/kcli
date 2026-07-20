@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"kcli/internal/k8s"
-	"kcli/internal/ui"
+	"github.com/teknik-github/kcli/internal/k8s"
+	"github.com/teknik-github/kcli/internal/ui"
 )
 
 func main() {

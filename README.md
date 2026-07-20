@@ -45,11 +45,11 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 ```bash
 export PATH=$PATH:/usr/local/go/bin      # if the Go toolchain isn't already on PATH
 
-# From a local checkout of this repository:
-go install .
+# Straight from GitHub:
+go install github.com/teknik-github/kcli@latest
 
-# Or, once the module is published to a VCS host, install by path:
-# go install github.com/<owner>/kcli@latest
+# Or from a local checkout of this repository:
+go install .
 ```
 
 `go install` places the `kcli` binary in `$(go env GOPATH)/bin` (default `~/go/bin`). Make sure that directory is on your `PATH`, then run it:

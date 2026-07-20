@@ -3,7 +3,7 @@ package ui
 import (
 	"context"
 
-	"kcli/internal/k8s"
+	"github.com/teknik-github/kcli/internal/k8s"
 )
 
 // Row is the uniform, display-ready shape every resource is flattened into.
