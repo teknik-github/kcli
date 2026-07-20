@@ -14,6 +14,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
@@ -563,6 +564,55 @@ func (c *Client) CordonNode(ctx context.Context, name string, cordon bool) error
 	patch := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%t}}`, cordon))
 	_, err := c.clientset.CoreV1().Nodes().Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
 	return err
+}
+
+// DrainNode cordons a node then evicts its evictable pods via the Eviction API
+// (which respects PodDisruptionBudgets). DaemonSet-managed and static/mirror
+// pods are skipped, matching `kubectl drain` defaults. It returns how many pods
+// were evicted; eviction errors for individual pods do not stop the drain, the
+// first one is returned once every pod has been attempted.
+func (c *Client) DrainNode(ctx context.Context, name string) (evicted int, err error) {
+	if cerr := c.CordonNode(ctx, name, true); cerr != nil {
+		return 0, fmt.Errorf("cordon: %w", cerr)
+	}
+	pods, lerr := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+		FieldSelector: fields.OneTermEqualSelector("spec.nodeName", name).String(),
+	})
+	if lerr != nil {
+		return 0, lerr
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if skipDrain(p) {
+			continue
+		}
+		ev := &policyv1.Eviction{
+			ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace},
+		}
+		if e := c.clientset.PolicyV1().Evictions(p.Namespace).Evict(ctx, ev); e != nil {
+			if err == nil {
+				err = fmt.Errorf("evict %s/%s: %w", p.Namespace, p.Name, e)
+			}
+			continue
+		}
+		evicted++
+	}
+	return evicted, err
+}
+
+// skipDrain reports pods a drain must not evict: DaemonSet-managed pods (they
+// would be recreated on the node immediately), static/mirror pods (not backed
+// by the API), and already-terminal pods.
+func skipDrain(p *corev1.Pod) bool {
+	if _, ok := p.Annotations["kubernetes.io/config.mirror"]; ok {
+		return true
+	}
+	for _, o := range p.OwnerReferences {
+		if o.Kind == "DaemonSet" {
+			return true
+		}
+	}
+	return p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed
 }
 
 // Event is a display-oriented snapshot of a cluster event. Name is the event

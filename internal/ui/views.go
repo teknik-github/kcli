@@ -9,15 +9,25 @@ import (
 // view returns the active view definition.
 func (a *App) view() *viewDef { return resourceViews[a.viewIdx] }
 
-// match reports whether name/namespace contain the active filter (case-
-// insensitive). An empty filter matches everything.
-func (a *App) match(namespace, name string) bool {
+// match reports whether any of a row's visible cells (or its namespace/name
+// keys) contain the active filter (case-insensitive). An empty filter matches
+// everything. Searching every cell lets you filter by any column — e.g. Events
+// by reason/object, Pods by node or status.
+func (a *App) match(r Row) bool {
 	if a.filter == "" {
 		return true
 	}
 	f := strings.ToLower(a.filter)
-	return strings.Contains(strings.ToLower(name), f) ||
-		strings.Contains(strings.ToLower(namespace), f)
+	if strings.Contains(strings.ToLower(r.Namespace), f) ||
+		strings.Contains(strings.ToLower(r.Name), f) {
+		return true
+	}
+	for _, cell := range r.Cells {
+		if strings.Contains(strings.ToLower(cell), f) {
+			return true
+		}
+	}
+	return false
 }
 
 // filteredRows returns the current view's rows matching the active filter and
@@ -32,7 +42,7 @@ func (a *App) filteredRows() []Row {
 	} else {
 		out = make([]Row, 0, len(a.rows))
 		for _, r := range a.rows {
-			if a.match(r.Namespace, r.Name) {
+			if a.match(r) {
 				out = append(out, r)
 			}
 		}

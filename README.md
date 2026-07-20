@@ -109,7 +109,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `1`–`9`             | Jump directly to the Nth view                                   |
 | `Tab` / `Shift-Tab` | Cycle to the next / previous view                               |
 | `Enter`             | Resource detail (`describe` YAML + events)                      |
-| `/`                 | Filter (name/namespace substring; empty = clear)               |
+| `/`                 | Filter (any-column substring; empty = clear)                   |
 | `.`                 | Cycle the sort column (wraps, including "no sort")             |
 | `,`                 | Flip sort direction (ascending/descending)                     |
 | `n`                 | Namespace picker (`<all>` for every namespace)                 |
@@ -120,6 +120,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `s`                 | Scale (change replica count)                                    |
 | `R`                 | Rollout restart                                                 |
 | `c`                 | Cordon / uncordon a node                                        |
+| `D`                 | Drain a node (cordon + evict pods)                              |
 | `f`                 | Start a port-forward                                            |
 | `F`                 | Open the Port-Forward view                                      |
 | `d`                 | Delete the resource (with confirmation)                        |
@@ -136,7 +137,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | DaemonSets    | restart, delete                                       |
 | StatefulSets  | scale, restart, delete                                |
 | ReplicaSets   | delete                                                |
-| Nodes         | graph, cordon/uncordon                                |
+| Nodes         | graph, cordon/uncordon, drain                         |
 | Services, Ingresses, Jobs, CronJobs, ConfigMaps, Secrets, PVCs | delete |
 | Events        | read-only (`Enter` for YAML)                          |
 | Port-Fwd      | `Enter`/`d` stop the selected forward; `q` go back    |
@@ -223,9 +224,8 @@ There is no permanent test suite. Two ways to verify:
 ## Known limitations
 
 - No runtime context switching (uses the current-context at startup).
-- Filter only matches name/namespace; no label-selector support yet.
+- Filter is a substring match across visible columns; no label-selector support yet.
 - Describe is read-only (no YAML edit/apply).
-- Nodes support cordon/uncordon only (no drain).
 
 ---
 

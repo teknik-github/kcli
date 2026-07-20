@@ -95,6 +95,9 @@ func (a *App) showContainerList(pod string, conts []string, then func(container 
 	a.openModal("container", list, 44, len(conts)+2)
 }
 
+// logMaxLines caps how many log lines the follow buffer retains.
+const logMaxLines = 5000
+
 // showLogs streams the selected pod's container logs into a scrollable pane,
 // prompting for a container first on multi-container pods.
 func (a *App) showLogs() {
@@ -171,27 +174,56 @@ func (a *App) streamLogs(view *tview.TextView, namespace, name, container string
 		}
 		defer stream.Close()
 
-		started := false
+		// Keep only the last logMaxLines so a long follow session cannot grow the
+		// buffer without bound. lines holds complete lines; partial is the
+		// trailing fragment not yet terminated by a newline.
+		var lines []string
+		var partial string
+		any := false
 		buf := make([]byte, 8*1024)
 		for {
 			n, rerr := stream.Read(buf)
 			if n > 0 {
-				chunk := tview.Escape(string(buf[:n]))
+				any = true
+				partial += string(buf[:n])
+				for {
+					nl := strings.IndexByte(partial, '\n')
+					if nl < 0 {
+						break
+					}
+					lines = append(lines, partial[:nl])
+					partial = partial[nl+1:]
+				}
+				if len(lines) > logMaxLines {
+					lines = lines[len(lines)-logMaxLines:]
+				}
+				text := strings.Join(lines, "\n")
+				if partial != "" {
+					if text != "" {
+						text += "\n"
+					}
+					text += partial
+				}
+				display := tview.Escape(text)
 				a.tv.QueueUpdateDraw(func() {
 					if ctx.Err() != nil {
 						return
 					}
-					if !started {
-						view.SetText("") // clear the "streaming…" placeholder
-						started = true
-					}
-					fmt.Fprint(view, chunk)
+					view.SetText(display) // replaces the "streaming…" placeholder
 					view.ScrollToEnd()
 				})
 			}
 			if rerr != nil {
 				break // io.EOF (snapshot done) or context cancellation
 			}
+		}
+		if !any {
+			a.tv.QueueUpdateDraw(func() {
+				if ctx.Err() != nil {
+					return
+				}
+				view.SetText("(no logs)")
+			})
 		}
 	}()
 }
@@ -396,6 +428,31 @@ func (a *App) confirmCordon() {
 				})
 				return
 			}
+			a.refresh()
+		}()
+	})
+}
+
+// confirmDrain cordons the selected node and evicts its evictable pods. Only
+// the Nodes view (Caps.Drain) reaches here.
+func (a *App) confirmDrain() {
+	row, ok := a.selectedRow()
+	if !ok {
+		return
+	}
+	name := row.Name
+	a.confirm("drain", fmt.Sprintf("Drain node %s?\n(cordon + evict all evictable pods)", name), "Drain", func() {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			n, err := a.client.DrainNode(ctx, name)
+			a.tv.QueueUpdateDraw(func() {
+				if err != nil {
+					a.showMessage("drain", fmt.Sprintf("drain %s: evicted %d, error: %v", name, n, err))
+				} else {
+					a.showMessage("drain", fmt.Sprintf("drained %s: evicted %d pod(s)", name, n))
+				}
+			})
 			a.refresh()
 		}()
 	})

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"time"
 
 	"github.com/teknik-github/kcli/internal/k8s"
 )
@@ -26,19 +27,21 @@ type viewCaps struct {
 	PortForward bool
 	Restart     bool // rollout restart (workloads with a pod template)
 	Cordon      bool // toggle node schedulability
+	Drain       bool // cordon + evict pods (nodes)
 }
 
 // viewDef describes one resource view. Adding a resource means appending one
 // viewDef to resourceViews — no other switch statements to touch.
 type viewDef struct {
-	ID            string // singular kind, used by Describe/Delete ("pod", ...)
-	Title         string
-	Columns       []string
-	StatusCol     int  // column index to color as a status, -1 for none
-	ClusterScoped bool // no namespace (nodes)
-	Local         bool // rows come from App state, not the cluster (Fetch unused)
-	Caps          viewCaps
-	Fetch         func(ctx context.Context, c *k8s.Client, namespace string) ([]Row, error)
+	ID              string // singular kind, used by Describe/Delete ("pod", ...)
+	Title           string
+	Columns         []string
+	StatusCol       int           // column index to color as a status, -1 for none
+	ClusterScoped   bool          // no namespace (nodes)
+	Local           bool          // rows come from App state, not the cluster (Fetch unused)
+	RefreshInterval time.Duration // per-view auto-refresh cadence; 0 = default (refreshInterval)
+	Caps            viewCaps
+	Fetch           func(ctx context.Context, c *k8s.Client, namespace string) ([]Row, error)
 }
 
 // resourceViews is the single source of truth for the tab bar and all
@@ -128,7 +131,7 @@ var resourceViews = []*viewDef{
 		Columns:       []string{"NAME", "STATUS", "ROLES", "CPU", "MEM", "VERSION", "AGE"},
 		StatusCol:     1,
 		ClusterScoped: true,
-		Caps:          viewCaps{Graph: true, Cordon: true}, // nodes are never deleted from kcli
+		Caps:          viewCaps{Graph: true, Cordon: true, Drain: true}, // nodes are never deleted from kcli
 		Fetch: func(ctx context.Context, c *k8s.Client, _ string) ([]Row, error) {
 			nodes, err := c.Nodes(ctx)
 			if err != nil {
@@ -295,11 +298,12 @@ var resourceViews = []*viewDef{
 		},
 	},
 	{
-		ID:        "event",
-		Title:     "Events",
-		Columns:   []string{"NAMESPACE", "LAST-SEEN", "TYPE", "REASON", "OBJECT", "COUNT", "MESSAGE"},
-		StatusCol: 2,          // TYPE: Normal (green) / Warning (red)
-		Caps:      viewCaps{}, // read-only; Enter still opens the event YAML
+		ID:              "event",
+		Title:           "Events",
+		Columns:         []string{"NAMESPACE", "LAST-SEEN", "TYPE", "REASON", "OBJECT", "COUNT", "MESSAGE"},
+		StatusCol:       2,                // TYPE: Normal (green) / Warning (red)
+		RefreshInterval: 15 * time.Second, // events can be numerous; poll them less often
+		Caps:            viewCaps{},       // read-only; Enter still opens the event YAML
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			evs, err := c.Events(ctx, ns)
 			if err != nil {

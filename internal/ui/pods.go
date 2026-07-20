@@ -136,6 +136,11 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 			a.confirmCordon()
 		}
 		return nil
+	case 'D':
+		if caps.Drain {
+			a.confirmDrain()
+		}
+		return nil
 	}
 	return event
 }

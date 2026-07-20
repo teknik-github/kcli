@@ -100,14 +100,25 @@ func (a *App) Run() error {
 	return a.tv.Run()
 }
 
-// autoRefresh loads the current view once immediately, then polls the cluster
-// on a fixed interval until the app stops.
+// autoRefresh loads the current view once immediately, then polls on the base
+// interval, refreshing only once the active view's own cadence has elapsed.
+// Views may set RefreshInterval to poll less often (e.g. Events); switching to
+// a faster view stays responsive because switchView triggers its own reload.
 func (a *App) autoRefresh() {
 	a.refresh()
 	ticker := time.NewTicker(refreshInterval)
 	defer ticker.Stop()
+	var elapsed time.Duration
 	for range ticker.C {
-		a.refresh()
+		elapsed += refreshInterval
+		want := refreshInterval
+		if iv := resourceViews[a.viewIdx].RefreshInterval; iv > want {
+			want = iv
+		}
+		if elapsed >= want {
+			elapsed = 0
+			a.refresh()
+		}
 	}
 }
 
@@ -248,7 +259,7 @@ func (a *App) setHeaderError(err error) {
 
 const footerHelp = "[::b]q[-] quit  [::b]tab[-] view  [::b]enter[-] detail  [::b]/[-] filter  [::b].[-] sort  " +
 	"[::b]g[-] graph  [::b]f[-] fwd  [::b]F[-] fwd-view  [::b]l[-] logs  [::b]e[-] exec  [::b]s[-] scale  " +
-	"[::b]R[-] restart  [::b]c[-] cordon  [::b]d[-] del  [::b]n[-] ns"
+	"[::b]R[-] restart  [::b]c[-] cordon  [::b]D[-] drain  [::b]d[-] del  [::b]n[-] ns"
 
 // logoLines is the KCLI wordmark in figlet's "ANSI Shadow" style: the solid
 // blocks are the letter faces, the box-drawing glyphs their drop shadow. All
