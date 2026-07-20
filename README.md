@@ -26,6 +26,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Actions**: describe (YAML + events), edit YAML in `$EDITOR`, scale, rollout restart, delete, cordon/uncordon & drain nodes, port-forward.
 - **Filter** (name/namespace substring) & **sort** by column (duration- and number-aware).
 - **Safe secrets**: values are always masked (`<redacted: N bytes>`) when describing.
+- **Context switching** (`x`): switch cluster/context at runtime, no restart.
 
 ---
 
@@ -85,7 +86,7 @@ kcli resolves the cluster connection in this order:
 2. **`~/.kube/config`**
 3. **In-cluster config** (when running as a Pod)
 
-The active context is shown in the header. (There is no runtime context switching yet — kcli uses the current-context at startup.)
+The active context is shown in the header and starts as the kubeconfig's current-context. Switch to another context at runtime with `x`.
 
 ---
 
@@ -113,6 +114,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `.`                 | Cycle the sort column (wraps, including "no sort")             |
 | `,`                 | Flip sort direction (ascending/descending)                     |
 | `n`                 | Namespace picker (`<all>` for every namespace)                 |
+| `x`                 | Context picker (switch cluster/context; `*` marks the current) |
 | `r`                 | Manual refresh                                                  |
 | `l`                 | Logs (follow mode; inside: `p` toggle previous, `q`/`Esc` close) |
 | `e`                 | Interactive exec shell                                          |
@@ -151,6 +153,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 - **Rollout restart**: stamps the `kubectl.kubernetes.io/restartedAt` annotation — identical to `kubectl rollout restart`.
 - **Port-forward** runs in the background and stays alive after the dialog closes; the header shows `⇄ pf:N`. Manage/stop forwards from the Port-Fwd view (`F`).
 - **Events** are sorted newest-first; TYPE `Normal` is green, `Warning` is red.
+- **Context switch** (`x`): rebuilds the client for the chosen kubeconfig context and reloads; the namespace, filter, and sort reset since they are cluster-specific. Background port-forwards keep running against the cluster they were started on.
 
 ---
 
@@ -225,7 +228,6 @@ There is no permanent test suite. Two ways to verify:
 
 ## Known limitations
 
-- No runtime context switching (uses the current-context at startup).
 - Filter is a substring match across visible columns; no label-selector support yet.
 - Edit applies changes with a PUT (like `kubectl edit`), not server-side apply.
 

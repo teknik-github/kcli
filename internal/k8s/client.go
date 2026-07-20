@@ -34,10 +34,11 @@ import (
 // Client is a thin wrapper over a typed clientset plus the resolved context
 // metadata that the UI wants to display.
 type Client struct {
-	clientset *kubernetes.Clientset
-	metrics   *metricsv.Clientset // nil if metrics-server is unavailable
-	restCfg   *rest.Config        // kept for streaming subresources (exec)
-	Context   string              // current kubeconfig context name
+	clientset  *kubernetes.Clientset
+	metrics    *metricsv.Clientset // nil if metrics-server is unavailable
+	restCfg    *rest.Config        // kept for streaming subresources (exec)
+	Context    string              // current kubeconfig context name
+	kubeconfig string              // resolved kubeconfig path, for switching context
 }
 
 // NewClient builds a Client from a kubeconfig path. An empty path falls back to
@@ -48,44 +49,88 @@ func NewClient(kubeconfig string) (*Client, error) {
 			kubeconfig = filepath.Join(home, ".kube", "config")
 		}
 	}
-
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if kubeconfig != "" {
-		loadingRules.ExplicitPath = kubeconfig
+	c := &Client{kubeconfig: kubeconfig}
+	if err := c.connect(""); err != nil {
+		return nil, err
 	}
-	cfgLoader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		loadingRules, &clientcmd.ConfigOverrides{},
-	)
+	return c, nil
+}
+
+// loadingRules returns the kubeconfig loading rules for this client's path.
+func (c *Client) loadingRules() *clientcmd.ClientConfigLoadingRules {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if c.kubeconfig != "" {
+		rules.ExplicitPath = c.kubeconfig
+	}
+	return rules
+}
+
+// connect (re)builds the clientset/metrics/restCfg for the given context and
+// stores them on the receiver. An empty contextName uses the kubeconfig's
+// current-context; on failure it falls back to in-cluster config.
+func (c *Client) connect(contextName string) error {
+	overrides := &clientcmd.ConfigOverrides{}
+	if contextName != "" {
+		overrides.CurrentContext = contextName
+	}
+	cfgLoader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(c.loadingRules(), overrides)
 
 	restCfg, err := cfgLoader.ClientConfig()
 	if err != nil {
 		// Fall back to in-cluster config (running as a pod).
 		restCfg, err = rest.InClusterConfig()
 		if err != nil {
-			return nil, fmt.Errorf("no usable kubeconfig or in-cluster config: %w", err)
+			return fmt.Errorf("no usable kubeconfig or in-cluster config: %w", err)
 		}
 	}
 
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		return nil, fmt.Errorf("build clientset: %w", err)
+		return fmt.Errorf("build clientset: %w", err)
 	}
 
-	ctxName := ""
-	if raw, err := cfgLoader.RawConfig(); err == nil {
-		ctxName = raw.CurrentContext
+	ctxName := contextName
+	if ctxName == "" {
+		if raw, err := cfgLoader.RawConfig(); err == nil {
+			ctxName = raw.CurrentContext
+		}
 	}
 
 	// Metrics are best-effort: a cluster without metrics-server still works,
 	// the CPU/MEM columns just render "-".
 	metricsClient, _ := metricsv.NewForConfig(restCfg)
 
-	return &Client{
-		clientset: clientset,
-		metrics:   metricsClient,
-		restCfg:   restCfg,
-		Context:   ctxName,
-	}, nil
+	c.clientset = clientset
+	c.metrics = metricsClient
+	c.restCfg = restCfg
+	c.Context = ctxName
+	return nil
+}
+
+// Contexts lists the context names defined in the kubeconfig, sorted.
+func (c *Client) Contexts() ([]string, error) {
+	raw, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		c.loadingRules(), &clientcmd.ConfigOverrides{}).RawConfig()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(raw.Contexts))
+	for name := range raw.Contexts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// WithContext builds a fresh Client pointed at a different kubeconfig context,
+// leaving the receiver untouched. Building is local (no network); the first
+// request against the new context is what actually reaches the cluster.
+func (c *Client) WithContext(contextName string) (*Client, error) {
+	nc := &Client{kubeconfig: c.kubeconfig}
+	if err := nc.connect(contextName); err != nil {
+		return nil, err
+	}
+	return nc, nil
 }
 
 // Pod is a display-oriented snapshot of a pod, flattened for a TUI table.

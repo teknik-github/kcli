@@ -87,6 +87,9 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 	case 'n':
 		a.showNamespacePicker()
 		return nil
+	case 'x':
+		a.showContextPicker()
+		return nil
 	case '/':
 		a.showFilterDialog()
 		return nil

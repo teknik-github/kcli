@@ -34,6 +34,7 @@ type App struct {
 	filter      string // case-insensitive substring on name/namespace; "" = all
 	sortCol     int    // column index to sort by; -1 = fetch order
 	sortDesc    bool   // descending when true
+	clientGen   int    // bumped on context switch; drops stale in-flight refreshes
 
 	graphStop  chan struct{}      // stops the live graph sampler when non-nil
 	logsCancel context.CancelFunc // cancels the active log stream when non-nil
@@ -128,9 +129,11 @@ func (a *App) refresh() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Capture the view at load time so a mid-flight view switch does not store
-	// results into the wrong view.
+	// Capture the view and client generation at load time so a mid-flight view
+	// switch or context switch does not store results into the wrong place.
 	idx := a.viewIdx
+	gen := a.clientGen
+	cl := a.client
 	view := resourceViews[idx]
 
 	// Local views (port-forwards) are backed by App state, not the cluster.
@@ -151,11 +154,11 @@ func (a *App) refresh() {
 	if view.ClusterScoped {
 		ns = ""
 	}
-	rows, err := view.Fetch(ctx, a.client, ns)
+	rows, err := view.Fetch(ctx, cl, ns)
 
 	a.tv.QueueUpdateDraw(func() {
-		if a.viewIdx != idx {
-			return // user switched views while this load was in flight
+		if a.viewIdx != idx || a.clientGen != gen {
+			return // view or context switched while this load was in flight
 		}
 		if err != nil {
 			a.setHeaderError(err)
@@ -259,7 +262,7 @@ func (a *App) setHeaderError(err error) {
 
 const footerHelp = "[::b]q[-] quit  [::b]tab[-] view  [::b]enter[-] detail  [::b]/[-] filter  [::b].[-] sort  " +
 	"[::b]g[-] graph  [::b]f[-] fwd  [::b]F[-] fwd-view  [::b]l[-] logs  [::b]e[-] exec  [::b]E[-] edit  [::b]s[-] scale  " +
-	"[::b]R[-] restart  [::b]c[-] cordon  [::b]D[-] drain  [::b]d[-] del  [::b]n[-] ns"
+	"[::b]R[-] restart  [::b]c[-] cordon  [::b]D[-] drain  [::b]d[-] del  [::b]n[-] ns  [::b]x[-] ctx"
 
 // logoLines is the KCLI wordmark in figlet's "ANSI Shadow" style: the solid
 // blocks are the letter faces, the box-drawing glyphs their drop shadow. All

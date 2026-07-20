@@ -51,6 +51,68 @@ func (a *App) setNamespace(ns string) {
 	go a.refresh()
 }
 
+// showContextPicker lists the kubeconfig contexts and switches to the chosen
+// one. The active context is marked with "*".
+func (a *App) showContextPicker() {
+	names, err := a.client.Contexts()
+	if err != nil {
+		a.showMessage("context", fmt.Sprintf("error: %v", err))
+		return
+	}
+	if len(names) == 0 {
+		a.showMessage("context", "no contexts found in kubeconfig")
+		return
+	}
+
+	list := tview.NewList().ShowSecondaryText(false)
+	list.SetBorder(true).SetTitle(" context ")
+	for _, n := range names {
+		name := n // capture
+		label := name
+		if name == a.client.Context {
+			label = "* " + name // mark the active context
+		}
+		list.AddItem(label, "", 0, func() {
+			a.switchContext(name)
+		})
+	}
+	list.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
+		if e.Key() == tcell.KeyEscape {
+			a.closeModal("context")
+			return nil
+		}
+		return e
+	})
+	a.openModal("context", list, 60, 20)
+}
+
+// switchContext rebuilds the client for the chosen context and reloads.
+// Cluster-specific state (namespace, filter, sort) is reset, and the client
+// generation is bumped so any in-flight refresh from the old cluster is dropped.
+func (a *App) switchContext(name string) {
+	if name == a.client.Context {
+		a.closeModal("context")
+		return
+	}
+	nc, err := a.client.WithContext(name)
+	if err != nil {
+		a.closeModal("context")
+		a.showMessage("context", fmt.Sprintf("error: %v", err))
+		return
+	}
+	a.client = nc
+	a.clientGen++
+	a.namespace = ""
+	a.filter = ""
+	a.sortCol = -1
+	a.sortDesc = false
+	a.closeModal("context")
+	a.table.Clear()
+	a.drawHeader()
+	a.drawTabs()
+	go a.refresh()
+}
+
 // pickContainer resolves which container an action targets: it runs `then`
 // directly for single-container pods, or pops a picker for multi-container
 // ones. Container names are fetched off the UI goroutine.
