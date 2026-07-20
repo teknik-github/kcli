@@ -109,7 +109,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `1`–`9`             | Jump directly to the Nth view                                   |
 | `Tab` / `Shift-Tab` | Cycle to the next / previous view                               |
 | `Enter`             | Resource detail (`describe` YAML + events)                      |
-| `/`                 | Filter (any-column substring; empty = clear)                   |
+| `/`                 | Filter (any-column substring; empty submit or `Esc` clears)     |
 | `.`                 | Cycle the sort column (wraps, including "no sort")             |
 | `,`                 | Flip sort direction (ascending/descending)                     |
 | `n`                 | Namespace picker (`<all>` for every namespace)                 |

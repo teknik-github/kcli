@@ -30,6 +30,15 @@ func (a *App) match(r Row) bool {
 	return false
 }
 
+// clearFilter removes any active filter and repaints. The cursor resets to the
+// top because the visible row set changes.
+func (a *App) clearFilter() {
+	a.filter = ""
+	a.table.Select(1, 0)
+	a.drawHeader()
+	a.drawTable()
+}
+
 // filteredRows returns the current view's rows matching the active filter and
 // ordered by the active sort column (fetch order when unsorted).
 func (a *App) filteredRows() []Row {

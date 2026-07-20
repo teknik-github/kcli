@@ -59,6 +59,11 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 			a.showDetail()
 		}
 		return nil
+	case tcell.KeyEscape:
+		if a.filter != "" {
+			a.clearFilter() // Esc clears an active filter; no-op otherwise
+			return nil
+		}
 	}
 
 	// Number keys 1..N jump straight to a view.
