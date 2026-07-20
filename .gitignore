@@ -1,0 +1,8 @@
+# Compiled binary (named after the module/dir)
+/kcli
+*.exe
+*.test
+
+# Local tooling / editor / OS
+.claude/
+.DS_Store
