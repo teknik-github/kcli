@@ -28,6 +28,7 @@ type viewCaps struct {
 	Restart     bool // rollout restart (workloads with a pod template)
 	Cordon      bool // toggle node schedulability
 	Drain       bool // cordon + evict pods (nodes)
+	Edit        bool // edit YAML in $EDITOR and apply
 }
 
 // viewDef describes one resource view. Adding a resource means appending one
@@ -52,7 +53,7 @@ var resourceViews = []*viewDef{
 		Title:     "Pods",
 		Columns:   []string{"NAMESPACE", "NAME", "READY", "STATUS", "RESTARTS", "CPU", "MEM", "AGE", "NODE"},
 		StatusCol: 3,
-		Caps:      viewCaps{Logs: true, Exec: true, Graph: true, Delete: true, PortForward: true},
+		Caps:      viewCaps{Logs: true, Exec: true, Graph: true, Delete: true, PortForward: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			pods, err := c.Pods(ctx, ns)
 			if err != nil {
@@ -72,7 +73,7 @@ var resourceViews = []*viewDef{
 		Title:     "Deployments",
 		Columns:   []string{"NAMESPACE", "NAME", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Scale: true, Delete: true, Restart: true},
+		Caps:      viewCaps{Scale: true, Delete: true, Restart: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			deps, err := c.Deployments(ctx, ns)
 			if err != nil {
@@ -91,7 +92,7 @@ var resourceViews = []*viewDef{
 		Title:     "DaemonSets",
 		Columns:   []string{"NAMESPACE", "NAME", "DESIRED", "CURRENT", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Restart: true, Delete: true},
+		Caps:      viewCaps{Restart: true, Delete: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			sets, err := c.DaemonSets(ctx, ns)
 			if err != nil {
@@ -111,7 +112,7 @@ var resourceViews = []*viewDef{
 		Title:     "Services",
 		Columns:   []string{"NAMESPACE", "NAME", "TYPE", "CLUSTER-IP", "EXTERNAL-IP", "PORTS", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Delete: true},
+		Caps:      viewCaps{Delete: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			svcs, err := c.Services(ctx, ns)
 			if err != nil {
@@ -151,7 +152,7 @@ var resourceViews = []*viewDef{
 		Title:     "StatefulSets",
 		Columns:   []string{"NAMESPACE", "NAME", "READY", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Scale: true, Delete: true, Restart: true},
+		Caps:      viewCaps{Scale: true, Delete: true, Restart: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			sets, err := c.StatefulSets(ctx, ns)
 			if err != nil {
@@ -169,7 +170,7 @@ var resourceViews = []*viewDef{
 		Title:     "ReplicaSets",
 		Columns:   []string{"NAMESPACE", "NAME", "DESIRED", "CURRENT", "READY", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Delete: true},
+		Caps:      viewCaps{Delete: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			sets, err := c.ReplicaSets(ctx, ns)
 			if err != nil {
@@ -188,7 +189,7 @@ var resourceViews = []*viewDef{
 		Title:     "PVCs",
 		Columns:   []string{"NAMESPACE", "NAME", "STATUS", "VOLUME", "CAPACITY", "ACCESS", "STORAGECLASS", "AGE"},
 		StatusCol: 2,
-		Caps:      viewCaps{Delete: true},
+		Caps:      viewCaps{Delete: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			pvcs, err := c.PVCs(ctx, ns)
 			if err != nil {
@@ -207,7 +208,7 @@ var resourceViews = []*viewDef{
 		Title:     "Ingresses",
 		Columns:   []string{"NAMESPACE", "NAME", "CLASS", "HOSTS", "ADDRESS", "PORTS", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Delete: true},
+		Caps:      viewCaps{Delete: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			ings, err := c.Ingresses(ctx, ns)
 			if err != nil {
@@ -226,7 +227,7 @@ var resourceViews = []*viewDef{
 		Title:     "Jobs",
 		Columns:   []string{"NAMESPACE", "NAME", "COMPLETIONS", "DURATION", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Delete: true},
+		Caps:      viewCaps{Delete: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			jobs, err := c.Jobs(ctx, ns)
 			if err != nil {
@@ -245,7 +246,7 @@ var resourceViews = []*viewDef{
 		Title:     "CronJobs",
 		Columns:   []string{"NAMESPACE", "NAME", "SCHEDULE", "SUSPEND", "ACTIVE", "LAST-SCHEDULE", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Delete: true},
+		Caps:      viewCaps{Delete: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			jobs, err := c.CronJobs(ctx, ns)
 			if err != nil {
@@ -264,7 +265,7 @@ var resourceViews = []*viewDef{
 		Title:     "ConfigMaps",
 		Columns:   []string{"NAMESPACE", "NAME", "DATA", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Delete: true},
+		Caps:      viewCaps{Delete: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			cms, err := c.ConfigMaps(ctx, ns)
 			if err != nil {
@@ -283,7 +284,7 @@ var resourceViews = []*viewDef{
 		Title:     "Secrets",
 		Columns:   []string{"NAMESPACE", "NAME", "TYPE", "DATA", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Delete: true},
+		Caps:      viewCaps{Delete: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			secs, err := c.Secrets(ctx, ns)
 			if err != nil {

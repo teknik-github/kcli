@@ -23,7 +23,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Log streaming (follow)** with a toggle to a crashed container's *previous* logs.
 - **Interactive exec shell** into a container (auto-fallback `bash` → `sh`).
 - **Live CPU/MEM graphs** (sparklines) for pods and nodes.
-- **Actions**: describe (YAML + events), scale, rollout restart, delete, cordon/uncordon nodes, port-forward.
+- **Actions**: describe (YAML + events), edit YAML in `$EDITOR`, scale, rollout restart, delete, cordon/uncordon & drain nodes, port-forward.
 - **Filter** (name/namespace substring) & **sort** by column (duration- and number-aware).
 - **Safe secrets**: values are always masked (`<redacted: N bytes>`) when describing.
 
@@ -116,6 +116,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `r`                 | Manual refresh                                                  |
 | `l`                 | Logs (follow mode; inside: `p` toggle previous, `q`/`Esc` close) |
 | `e`                 | Interactive exec shell                                          |
+| `E`                 | Edit YAML in `$EDITOR` and apply on save                        |
 | `g`                 | Live CPU/MEM graph                                              |
 | `s`                 | Scale (change replica count)                                    |
 | `R`                 | Rollout restart                                                 |
@@ -132,13 +133,13 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 
 | View          | Available actions                                     |
 |---------------|-------------------------------------------------------|
-| Pods          | logs, exec, graph, delete, port-forward               |
-| Deployments   | scale, restart, delete                                |
-| DaemonSets    | restart, delete                                       |
-| StatefulSets  | scale, restart, delete                                |
-| ReplicaSets   | delete                                                |
+| Pods          | logs, exec, graph, edit, delete, port-forward         |
+| Deployments   | scale, restart, edit, delete                          |
+| DaemonSets    | restart, edit, delete                                 |
+| StatefulSets  | scale, restart, edit, delete                          |
+| ReplicaSets   | edit, delete                                          |
 | Nodes         | graph, cordon/uncordon, drain                         |
-| Services, Ingresses, Jobs, CronJobs, ConfigMaps, Secrets, PVCs | delete |
+| Services, Ingresses, Jobs, CronJobs, ConfigMaps, Secrets, PVCs | edit, delete |
 | Events        | read-only (`Enter` for YAML)                          |
 | Port-Fwd      | `Enter`/`d` stop the selected forward; `q` go back    |
 
@@ -146,6 +147,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 
 - **Logs**: follows the last 500 lines by default. Press `p` to switch to the **previous** container instance's logs (useful for `CrashLoopBackOff`).
 - **Exec**: the TUI is *suspended* and the terminal is handed to the shell; it resumes automatically when the shell exits. Multi-container pods show a container picker (init containers first).
+- **Edit** (`E`): fetches the live YAML (no events, secrets unmasked so values round-trip), opens it in `$EDITOR` (the TUI suspends), and on save applies it with an Update via the dynamic client. Unchanged buffers are a no-op.
 - **Rollout restart**: stamps the `kubectl.kubernetes.io/restartedAt` annotation — identical to `kubectl rollout restart`.
 - **Port-forward** runs in the background and stays alive after the dialog closes; the header shows `⇄ pf:N`. Manage/stop forwards from the Port-Fwd view (`F`).
 - **Events** are sorted newest-first; TYPE `Normal` is green, `Warning` is red.
@@ -225,7 +227,7 @@ There is no permanent test suite. Two ways to verify:
 
 - No runtime context switching (uses the current-context at startup).
 - Filter is a substring match across visible columns; no label-selector support yet.
-- Describe is read-only (no YAML edit/apply).
+- Edit applies changes with a PUT (like `kubectl edit`), not server-side apply.
 
 ---
 

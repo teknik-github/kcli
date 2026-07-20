@@ -15,11 +15,16 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
@@ -736,15 +741,13 @@ func (c *Client) ScaleDeployment(ctx context.Context, namespace, name string, re
 	return err
 }
 
-// Describe returns a YAML dump of the named object followed by its recent
-// events, resembling `kubectl describe`. kind is one of "pod", "deployment",
-// "service".
-func (c *Client) Describe(ctx context.Context, kind, namespace, name string) (string, error) {
+// getObject fetches a typed object by kind with its TypeMeta (apiVersion/kind)
+// populated, since typed Get calls leave TypeMeta empty. Shared by Describe and
+// GetYAML; it masks/strips nothing — callers decide.
+func (c *Client) getObject(ctx context.Context, kind, namespace, name string) (metav1.Object, error) {
 	var obj metav1.Object
 	var err error
 
-	// Typed Get calls leave TypeMeta empty, so set apiVersion/kind explicitly
-	// to make the YAML resemble what `kubectl get -o yaml` prints.
 	switch kind {
 	case "pod":
 		var p *corev1.Pod
@@ -786,7 +789,6 @@ func (c *Client) Describe(ctx context.Context, kind, namespace, name string) (st
 		s, err = c.clientset.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 		if s != nil {
 			s.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}
-			maskSecret(s) // redact values before rendering
 		}
 		obj = s
 	case "ingress":
@@ -846,26 +848,92 @@ func (c *Client) Describe(ctx context.Context, kind, namespace, name string) (st
 		}
 		obj = e
 	default:
-		return "", fmt.Errorf("unknown kind %q", kind)
+		return nil, fmt.Errorf("unknown kind %q", kind)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return obj, nil
+}
+
+// Describe returns a YAML dump of the named object followed by its recent
+// events, resembling `kubectl describe`. Secret values are masked.
+func (c *Client) Describe(ctx context.Context, kind, namespace, name string) (string, error) {
+	obj, err := c.getObject(ctx, kind, namespace, name)
 	if err != nil {
 		return "", err
 	}
-
-	// Drop noisy server-managed fields before rendering.
-	obj.SetManagedFields(nil)
+	if s, ok := obj.(*corev1.Secret); ok {
+		maskSecret(s) // redact values before rendering
+	}
+	obj.SetManagedFields(nil) // drop noisy server-managed fields
 
 	yml, err := yaml.Marshal(obj)
 	if err != nil {
 		return "", err
 	}
-
 	events, err := c.objectEvents(ctx, namespace, name)
 	if err != nil {
 		events = fmt.Sprintf("(failed to load events: %v)", err)
 	}
-
 	return fmt.Sprintf("%s\n--- Events ---\n%s", string(yml), events), nil
+}
+
+// GetYAML returns the object's YAML for editing: a fresh copy (carrying its
+// resourceVersion, so the edit round-trips as an optimistic-locked update) and
+// WITHOUT the events section. Secrets are intentionally NOT masked here — the
+// real values must round-trip, or an apply would overwrite them with markers.
+func (c *Client) GetYAML(ctx context.Context, kind, namespace, name string) (string, error) {
+	obj, err := c.getObject(ctx, kind, namespace, name)
+	if err != nil {
+		return "", err
+	}
+	obj.SetManagedFields(nil)
+	yml, err := yaml.Marshal(obj)
+	if err != nil {
+		return "", err
+	}
+	return string(yml), nil
+}
+
+// ApplyYAML updates a resource from edited YAML the way `kubectl edit` does — a
+// PUT (Update), not server-side apply. It parses the YAML into an unstructured
+// object, maps its kind to a REST resource via discovery, and updates through
+// the dynamic client, so it works for any kind without a per-kind switch.
+func (c *Client) ApplyYAML(ctx context.Context, data []byte) error {
+	obj := &unstructured.Unstructured{}
+	if err := yaml.Unmarshal(data, &obj.Object); err != nil {
+		return fmt.Errorf("parse YAML: %w", err)
+	}
+	gvk := obj.GroupVersionKind()
+	if gvk.Kind == "" || obj.GetName() == "" {
+		return fmt.Errorf("YAML is missing apiVersion/kind or metadata.name")
+	}
+
+	disco, err := discovery.NewDiscoveryClientForConfig(c.restCfg)
+	if err != nil {
+		return err
+	}
+	groups, err := restmapper.GetAPIGroupResources(disco)
+	if err != nil {
+		return err
+	}
+	mapping, err := restmapper.NewDiscoveryRESTMapper(groups).RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return fmt.Errorf("map %s: %w", gvk, err)
+	}
+
+	dyn, err := dynamic.NewForConfig(c.restCfg)
+	if err != nil {
+		return err
+	}
+	nri := dyn.Resource(mapping.Resource)
+	var target dynamic.ResourceInterface = nri
+	if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
+		target = nri.Namespace(obj.GetNamespace())
+	}
+	_, err = target.Update(ctx, obj, metav1.UpdateOptions{})
+	return err
 }
 
 // maskSecret redacts a secret's values in place, keeping key names and byte

@@ -258,7 +258,7 @@ func (a *App) setHeaderError(err error) {
 }
 
 const footerHelp = "[::b]q[-] quit  [::b]tab[-] view  [::b]enter[-] detail  [::b]/[-] filter  [::b].[-] sort  " +
-	"[::b]g[-] graph  [::b]f[-] fwd  [::b]F[-] fwd-view  [::b]l[-] logs  [::b]e[-] exec  [::b]s[-] scale  " +
+	"[::b]g[-] graph  [::b]f[-] fwd  [::b]F[-] fwd-view  [::b]l[-] logs  [::b]e[-] exec  [::b]E[-] edit  [::b]s[-] scale  " +
 	"[::b]R[-] restart  [::b]c[-] cordon  [::b]D[-] drain  [::b]d[-] del  [::b]n[-] ns"
 
 // logoLines is the KCLI wordmark in figlet's "ANSI Shadow" style: the solid

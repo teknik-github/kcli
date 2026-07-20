@@ -114,6 +114,11 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 			a.execShell()
 		}
 		return nil
+	case 'E':
+		if caps.Edit {
+			a.showEdit()
+		}
+		return nil
 	case 'g':
 		if caps.Graph {
 			a.showGraph()
