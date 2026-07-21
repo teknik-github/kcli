@@ -147,6 +147,10 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 		if anim, err := loadGIF(p); err == nil {
 			a.splash = anim
 			a.splashW, a.splashH = splashSize()
+		} else {
+			// Surface why the splash won't show instead of failing silently;
+			// printed before the TUI starts, so it's visible after quitting.
+			fmt.Fprintf(os.Stderr, "kcli: KCLI_SPLASH %q could not be loaded: %v\n", p, err)
 		}
 	}
 
