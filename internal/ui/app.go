@@ -63,6 +63,12 @@ type App struct {
 	baseRefresh time.Duration     // auto-refresh cadence floor
 	accent      string            // tview colour name for tabs/header highlights
 	userAliases map[string]string // custom :jump aliases -> resource name
+
+	// Live updates: informers call onChange (from their own goroutine) on any
+	// watched-resource change; onChange nudges watchTrigger, and watchLoop
+	// debounces those nudges into a refresh. See internal/k8s/informer.go.
+	onChange     func()
+	watchTrigger chan struct{}
 }
 
 // NewApp wires up the widget tree and key bindings. cfg may be nil; it carries
@@ -117,6 +123,16 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 	a.table.SetInputCapture(a.onTableKey)
 	a.tv.SetRoot(a.pages, true).SetFocus(a.table)
 
+	// Live updates: a bounded trigger channel coalesces informer callbacks.
+	a.watchTrigger = make(chan struct{}, 1)
+	a.onChange = func() {
+		select {
+		case a.watchTrigger <- struct{}{}:
+		default: // a refresh is already pending; nothing to add
+		}
+	}
+	client.SetOnChange(a.onChange)
+
 	return a
 }
 
@@ -128,7 +144,22 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 // called synchronously before tv.Run() or it deadlocks.
 func (a *App) Run() error {
 	go a.autoRefresh()
+	go a.watchLoop()
 	return a.tv.Run()
+}
+
+// watchLoop turns debounced informer nudges into refreshes. It coalesces a burst
+// of change events (e.g. the flood an informer emits on initial sync) into a
+// single reload shortly after they settle.
+func (a *App) watchLoop() {
+	for range a.watchTrigger {
+		time.Sleep(400 * time.Millisecond) // let a burst settle
+		select {                           // drop any nudge that arrived meanwhile
+		case <-a.watchTrigger:
+		default:
+		}
+		a.refresh()
+	}
 }
 
 // autoRefresh loads the current view once immediately, then polls on the base

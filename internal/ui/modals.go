@@ -102,6 +102,8 @@ func (a *App) switchContext(name string) {
 		a.showMessage("context", fmt.Sprintf("error: %v", err))
 		return
 	}
+	a.client.Stop() // tear down the old cluster's informers/watches
+	nc.SetOnChange(a.onChange)
 	a.client = nc
 	a.clientGen++
 	a.namespace = ""

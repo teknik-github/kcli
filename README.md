@@ -20,7 +20,8 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **14 resource views**: Pods, Deployments, DaemonSets, Services, Nodes, StatefulSets, ReplicaSets, PVCs, Ingresses, Jobs, CronJobs, ConfigMaps, Secrets, Events — plus a built-in **Port-Forward** view.
 - **Command-jump** (`:`): jump to any view by name or short alias (`:svc`, `:cj`, `:ev`, …).
 - **Generic / CRD view**: `:` any resource the cluster knows — CustomResourceDefinitions and built-ins without a dedicated view — resolved through discovery (kubectl-style short names) and listed read-only (name/age + YAML detail).
-- **Auto-refresh** every 3 seconds (per-view cadence; Events poll slower).
+- **Live updates** via shared informers: changes appear as they happen (watch-driven), and warm listers read from the in-memory cache instead of re-Listing the API each tick. A resource that can't be watched falls back to polling automatically.
+- **Auto-refresh** every 3 seconds (per-view cadence; Events poll slower) — mainly a metrics refresh and a safety net now that resource changes are watch-driven.
 - **Live metrics** (CPU/MEM columns + graphs) via metrics-server — *best-effort*; if metrics-server is absent it never errors, the columns just render `-`.
 - **Log streaming (follow)** with a toggle to a crashed container's *previous* logs, and an in-pane **grep** (`/`).
 - **Interactive exec shell** into a container (auto-fallback `bash` → `sh`).
@@ -199,7 +200,8 @@ Two packages under `internal/`:
 Wraps `client-go`. `Client` holds a typed `clientset`, an optional `*metricsv.Clientset` (best-effort), the `*rest.Config` (kept for streaming subresources like exec & port-forward), and lazily-built, cached discovery `RESTMapper` + `dynamic.Interface`. Each resource has a display struct flattened for the table, plus a lister that sorts by `(namespace, name)`. `Describe`/`Delete`/`Scale`/`RolloutRestart`/`RolloutUndo` are `kind`-string dispatchers.
 
 ```
-client.go        listers, dispatchers, display structs, describe/delete/scale/restart/cordon/drain, secret reveal, service→pod
+client.go        listers (cache-backed, live fallback), dispatchers, display/toX structs, describe/delete/scale/restart/cordon/drain, secret reveal, service→pod
+informer.go      shared informer cache: cachedObjects, onChange/Stop — live updates + fewer List calls
 dynamic.go       cached RESTMapper (+ShortcutExpander) & dynamic client; ResolveResource / ListDynamic / DescribeDynamic (CRDs)
 rollout.go       RolloutUndo (client-side: ReplicaSet template swap / ControllerRevision patch)
 metrics.go       enrich CPU/MEM (best-effort) + usage for graphs
@@ -258,6 +260,8 @@ Every resource is flattened into the uniform `Row{Namespace, Name, Cells}`. Filt
 `QueueUpdateDraw` **blocks** until the tview event loop drains it, and that loop only runs inside `tv.Run()`. So the first refresh must never be called synchronously before `Run()` (it would deadlock) — `autoRefresh` runs in its own goroutine. All background work mutates widgets/state only inside a `QueueUpdateDraw` closure — the only place it is safe to do so — so no locks are used.
 
 Shared state is **read on the UI goroutine, never a background one**: `refresh()` is `QueueUpdate(loadCurrentView)`, which reads `viewIdx`/`client`/`namespace` on the UI goroutine and captures them as locals before spawning the fetch. Every action that starts a goroutine likewise captures `cl := a.client` first — this is race-free *and* pins the action to the cluster it started on, so a runtime context switch (`x`, which reassigns `a.client`) can't redirect it mid-flight. The only cross-goroutine field is `refreshEvery` (`atomic.Int64`, the ticker's cadence).
+
+**Live updates** come from shared informers (`internal/k8s/informer.go`): resource listers read from an in-memory cache, and each informer's change handler calls a callback that nudges a bounded `watchTrigger` channel. `watchLoop` debounces those nudges (400 ms) into a `refresh()`, so edits/creates/deletes show up without waiting for the poll. Un-watchable resources fall back to a live List transparently; the periodic poll remains for metrics and as a safety net.
 
 ---
 

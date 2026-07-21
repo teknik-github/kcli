@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -19,8 +20,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -40,6 +43,14 @@ type Client struct {
 
 	mapper    meta.RESTMapper   // lazily built discovery REST mapper (dynamic/apply)
 	dynClient dynamic.Interface // lazily built dynamic client (generic/CRD views)
+
+	// Shared informer cache (informer.go). Listers read from it and fall back to
+	// a live List when a resource can't sync; onChange fires the UI's live refresh.
+	infMu      sync.Mutex
+	infFactory informers.SharedInformerFactory
+	infStop    chan struct{}
+	infStarted map[schema.GroupVersionResource]bool
+	onChange   func()
 }
 
 // NewClient builds a Client from a kubeconfig path. An empty path falls back to
@@ -162,15 +173,25 @@ func (c *Client) Namespaces(ctx context.Context) ([]string, error) {
 }
 
 // Pods lists pods in a namespace. An empty namespace lists across all namespaces.
+// Reads from the informer cache when available, else a live List.
 func (c *Client) Pods(ctx context.Context, namespace string) ([]Pod, error) {
-	list, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-
-	pods := make([]Pod, 0, len(list.Items))
-	for i := range list.Items {
-		pods = append(pods, toPod(&list.Items[i]))
+	var pods []Pod
+	if objs, ok, err := c.cachedObjects(ctx, gvrPods, namespace); ok && err == nil {
+		pods = make([]Pod, 0, len(objs))
+		for _, o := range objs {
+			if p, ok := o.(*corev1.Pod); ok {
+				pods = append(pods, toPod(p))
+			}
+		}
+	} else {
+		list, lerr := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		pods = make([]Pod, 0, len(list.Items))
+		for i := range list.Items {
+			pods = append(pods, toPod(&list.Items[i]))
+		}
 	}
 	sort.Slice(pods, func(i, j int) bool {
 		if pods[i].Namespace != pods[j].Namespace {
@@ -235,23 +256,37 @@ type Secret struct {
 	Age       string
 }
 
+// toSecret flattens a corev1.Secret to metadata only — values are never carried.
+func toSecret(s *corev1.Secret) Secret {
+	return Secret{
+		Name:      s.Name,
+		Namespace: s.Namespace,
+		Type:      string(s.Type),
+		Data:      len(s.Data),
+		Age:       humanAge(s.CreationTimestamp.Time),
+	}
+}
+
 // Secrets lists secrets in a namespace ("" = all namespaces). Only metadata is
 // returned; secret values are deliberately omitted.
 func (c *Client) Secrets(ctx context.Context, namespace string) ([]Secret, error) {
-	list, err := c.clientset.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Secret, 0, len(list.Items))
-	for i := range list.Items {
-		s := &list.Items[i]
-		out = append(out, Secret{
-			Name:      s.Name,
-			Namespace: s.Namespace,
-			Type:      string(s.Type),
-			Data:      len(s.Data),
-			Age:       humanAge(s.CreationTimestamp.Time),
-		})
+	var out []Secret
+	if objs, ok, err := c.cachedObjects(ctx, gvrSecrets, namespace); ok && err == nil {
+		out = make([]Secret, 0, len(objs))
+		for _, o := range objs {
+			if s, ok := o.(*corev1.Secret); ok {
+				out = append(out, toSecret(s))
+			}
+		}
+	} else {
+		list, lerr := c.clientset.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		out = make([]Secret, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toSecret(&list.Items[i]))
+		}
 	}
 	sortByNsName(len(out),
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
@@ -353,26 +388,40 @@ type PVC struct {
 	Age          string
 }
 
+// toStatefulSet flattens an appsv1.StatefulSet for display.
+func toStatefulSet(s *appsv1.StatefulSet) StatefulSet {
+	desired := int32(0)
+	if s.Spec.Replicas != nil {
+		desired = *s.Spec.Replicas
+	}
+	return StatefulSet{
+		Name:      s.Name,
+		Namespace: s.Namespace,
+		Ready:     fmt.Sprintf("%d/%d", s.Status.ReadyReplicas, desired),
+		Desired:   desired,
+		Age:       humanAge(s.CreationTimestamp.Time),
+	}
+}
+
 // StatefulSets lists statefulsets in a namespace ("" = all namespaces).
 func (c *Client) StatefulSets(ctx context.Context, namespace string) ([]StatefulSet, error) {
-	list, err := c.clientset.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]StatefulSet, 0, len(list.Items))
-	for i := range list.Items {
-		s := &list.Items[i]
-		desired := int32(0)
-		if s.Spec.Replicas != nil {
-			desired = *s.Spec.Replicas
+	var out []StatefulSet
+	if objs, ok, err := c.cachedObjects(ctx, gvrStatefulSets, namespace); ok && err == nil {
+		out = make([]StatefulSet, 0, len(objs))
+		for _, o := range objs {
+			if s, ok := o.(*appsv1.StatefulSet); ok {
+				out = append(out, toStatefulSet(s))
+			}
 		}
-		out = append(out, StatefulSet{
-			Name:      s.Name,
-			Namespace: s.Namespace,
-			Ready:     fmt.Sprintf("%d/%d", s.Status.ReadyReplicas, desired),
-			Desired:   desired,
-			Age:       humanAge(s.CreationTimestamp.Time),
-		})
+	} else {
+		list, lerr := c.clientset.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		out = make([]StatefulSet, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toStatefulSet(&list.Items[i]))
+		}
 	}
 	sortByNsName(len(out),
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
@@ -382,13 +431,23 @@ func (c *Client) StatefulSets(ctx context.Context, namespace string) ([]Stateful
 
 // PVCs lists persistent volume claims in a namespace ("" = all namespaces).
 func (c *Client) PVCs(ctx context.Context, namespace string) ([]PVC, error) {
-	list, err := c.clientset.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]PVC, 0, len(list.Items))
-	for i := range list.Items {
-		out = append(out, toPVC(&list.Items[i]))
+	var out []PVC
+	if objs, ok, err := c.cachedObjects(ctx, gvrPVCs, namespace); ok && err == nil {
+		out = make([]PVC, 0, len(objs))
+		for _, o := range objs {
+			if p, ok := o.(*corev1.PersistentVolumeClaim); ok {
+				out = append(out, toPVC(p))
+			}
+		}
+	} else {
+		list, lerr := c.clientset.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		out = make([]PVC, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toPVC(&list.Items[i]))
+		}
 	}
 	sortByNsName(len(out),
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
@@ -422,13 +481,23 @@ func (c *Client) Scale(ctx context.Context, kind, namespace, name string, replic
 
 // Ingresses lists ingresses in a namespace ("" = all namespaces).
 func (c *Client) Ingresses(ctx context.Context, namespace string) ([]Ingress, error) {
-	list, err := c.clientset.NetworkingV1().Ingresses(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Ingress, 0, len(list.Items))
-	for i := range list.Items {
-		out = append(out, toIngress(&list.Items[i]))
+	var out []Ingress
+	if objs, ok, err := c.cachedObjects(ctx, gvrIngresses, namespace); ok && err == nil {
+		out = make([]Ingress, 0, len(objs))
+		for _, o := range objs {
+			if in, ok := o.(*networkingv1.Ingress); ok {
+				out = append(out, toIngress(in))
+			}
+		}
+	} else {
+		list, lerr := c.clientset.NetworkingV1().Ingresses(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		out = make([]Ingress, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toIngress(&list.Items[i]))
+		}
 	}
 	sortByNsName(len(out),
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
@@ -438,13 +507,23 @@ func (c *Client) Ingresses(ctx context.Context, namespace string) ([]Ingress, er
 
 // Jobs lists jobs in a namespace ("" = all namespaces).
 func (c *Client) Jobs(ctx context.Context, namespace string) ([]Job, error) {
-	list, err := c.clientset.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Job, 0, len(list.Items))
-	for i := range list.Items {
-		out = append(out, toJob(&list.Items[i]))
+	var out []Job
+	if objs, ok, err := c.cachedObjects(ctx, gvrJobs, namespace); ok && err == nil {
+		out = make([]Job, 0, len(objs))
+		for _, o := range objs {
+			if j, ok := o.(*batchv1.Job); ok {
+				out = append(out, toJob(j))
+			}
+		}
+	} else {
+		list, lerr := c.clientset.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		out = make([]Job, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toJob(&list.Items[i]))
+		}
 	}
 	sortByNsName(len(out),
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
@@ -454,33 +533,57 @@ func (c *Client) Jobs(ctx context.Context, namespace string) ([]Job, error) {
 
 // Nodes lists cluster nodes (cluster-scoped, no namespace).
 func (c *Client) Nodes(ctx context.Context) ([]Node, error) {
-	list, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Node, 0, len(list.Items))
-	for i := range list.Items {
-		out = append(out, toNode(&list.Items[i]))
+	var out []Node
+	if objs, ok, err := c.cachedObjects(ctx, gvrNodes, ""); ok && err == nil {
+		out = make([]Node, 0, len(objs))
+		for _, o := range objs {
+			if n, ok := o.(*corev1.Node); ok {
+				out = append(out, toNode(n))
+			}
+		}
+	} else {
+		list, lerr := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		out = make([]Node, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toNode(&list.Items[i]))
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
+// toConfigMap flattens a corev1.ConfigMap for display (key count only).
+func toConfigMap(cm *corev1.ConfigMap) ConfigMap {
+	return ConfigMap{
+		Name:      cm.Name,
+		Namespace: cm.Namespace,
+		Data:      len(cm.Data) + len(cm.BinaryData),
+		Age:       humanAge(cm.CreationTimestamp.Time),
+	}
+}
+
 // ConfigMaps lists configmaps in a namespace ("" = all namespaces).
 func (c *Client) ConfigMaps(ctx context.Context, namespace string) ([]ConfigMap, error) {
-	list, err := c.clientset.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ConfigMap, 0, len(list.Items))
-	for i := range list.Items {
-		cm := &list.Items[i]
-		out = append(out, ConfigMap{
-			Name:      cm.Name,
-			Namespace: cm.Namespace,
-			Data:      len(cm.Data) + len(cm.BinaryData),
-			Age:       humanAge(cm.CreationTimestamp.Time),
-		})
+	var out []ConfigMap
+	if objs, ok, err := c.cachedObjects(ctx, gvrConfigMaps, namespace); ok && err == nil {
+		out = make([]ConfigMap, 0, len(objs))
+		for _, o := range objs {
+			if cm, ok := o.(*corev1.ConfigMap); ok {
+				out = append(out, toConfigMap(cm))
+			}
+		}
+	} else {
+		list, lerr := c.clientset.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		out = make([]ConfigMap, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toConfigMap(&list.Items[i]))
+		}
 	}
 	sortByNsName(len(out),
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
@@ -490,13 +593,23 @@ func (c *Client) ConfigMaps(ctx context.Context, namespace string) ([]ConfigMap,
 
 // Deployments lists deployments in a namespace ("" = all namespaces).
 func (c *Client) Deployments(ctx context.Context, namespace string) ([]Deployment, error) {
-	list, err := c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Deployment, 0, len(list.Items))
-	for i := range list.Items {
-		out = append(out, toDeployment(&list.Items[i]))
+	var out []Deployment
+	if objs, ok, err := c.cachedObjects(ctx, gvrDeployments, namespace); ok && err == nil {
+		out = make([]Deployment, 0, len(objs))
+		for _, o := range objs {
+			if d, ok := o.(*appsv1.Deployment); ok {
+				out = append(out, toDeployment(d))
+			}
+		}
+	} else {
+		list, lerr := c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		out = make([]Deployment, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toDeployment(&list.Items[i]))
+		}
 	}
 	sortByNsName(len(out),
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
@@ -506,13 +619,23 @@ func (c *Client) Deployments(ctx context.Context, namespace string) ([]Deploymen
 
 // Services lists services in a namespace ("" = all namespaces).
 func (c *Client) Services(ctx context.Context, namespace string) ([]Service, error) {
-	list, err := c.clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Service, 0, len(list.Items))
-	for i := range list.Items {
-		out = append(out, toService(&list.Items[i]))
+	var out []Service
+	if objs, ok, err := c.cachedObjects(ctx, gvrServices, namespace); ok && err == nil {
+		out = make([]Service, 0, len(objs))
+		for _, o := range objs {
+			if s, ok := o.(*corev1.Service); ok {
+				out = append(out, toService(s))
+			}
+		}
+	} else {
+		list, lerr := c.clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		out = make([]Service, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toService(&list.Items[i]))
+		}
 	}
 	sortByNsName(len(out),
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
@@ -532,25 +655,39 @@ type DaemonSet struct {
 	Age       string
 }
 
+// toDaemonSet flattens an appsv1.DaemonSet for display.
+func toDaemonSet(d *appsv1.DaemonSet) DaemonSet {
+	return DaemonSet{
+		Name:      d.Name,
+		Namespace: d.Namespace,
+		Desired:   d.Status.DesiredNumberScheduled,
+		Current:   d.Status.CurrentNumberScheduled,
+		Ready:     d.Status.NumberReady,
+		UpToDate:  d.Status.UpdatedNumberScheduled,
+		Available: d.Status.NumberAvailable,
+		Age:       humanAge(d.CreationTimestamp.Time),
+	}
+}
+
 // DaemonSets lists daemonsets in a namespace ("" = all namespaces).
 func (c *Client) DaemonSets(ctx context.Context, namespace string) ([]DaemonSet, error) {
-	list, err := c.clientset.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]DaemonSet, 0, len(list.Items))
-	for i := range list.Items {
-		d := &list.Items[i]
-		out = append(out, DaemonSet{
-			Name:      d.Name,
-			Namespace: d.Namespace,
-			Desired:   d.Status.DesiredNumberScheduled,
-			Current:   d.Status.CurrentNumberScheduled,
-			Ready:     d.Status.NumberReady,
-			UpToDate:  d.Status.UpdatedNumberScheduled,
-			Available: d.Status.NumberAvailable,
-			Age:       humanAge(d.CreationTimestamp.Time),
-		})
+	var out []DaemonSet
+	if objs, ok, err := c.cachedObjects(ctx, gvrDaemonSets, namespace); ok && err == nil {
+		out = make([]DaemonSet, 0, len(objs))
+		for _, o := range objs {
+			if d, ok := o.(*appsv1.DaemonSet); ok {
+				out = append(out, toDaemonSet(d))
+			}
+		}
+	} else {
+		list, lerr := c.clientset.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		out = make([]DaemonSet, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toDaemonSet(&list.Items[i]))
+		}
 	}
 	sortByNsName(len(out),
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
@@ -568,27 +705,41 @@ type ReplicaSet struct {
 	Age       string
 }
 
+// toReplicaSet flattens an appsv1.ReplicaSet for display.
+func toReplicaSet(r *appsv1.ReplicaSet) ReplicaSet {
+	desired := int32(0)
+	if r.Spec.Replicas != nil {
+		desired = *r.Spec.Replicas
+	}
+	return ReplicaSet{
+		Name:      r.Name,
+		Namespace: r.Namespace,
+		Desired:   desired,
+		Current:   r.Status.Replicas,
+		Ready:     r.Status.ReadyReplicas,
+		Age:       humanAge(r.CreationTimestamp.Time),
+	}
+}
+
 // ReplicaSets lists replicasets in a namespace ("" = all namespaces).
 func (c *Client) ReplicaSets(ctx context.Context, namespace string) ([]ReplicaSet, error) {
-	list, err := c.clientset.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ReplicaSet, 0, len(list.Items))
-	for i := range list.Items {
-		r := &list.Items[i]
-		desired := int32(0)
-		if r.Spec.Replicas != nil {
-			desired = *r.Spec.Replicas
+	var out []ReplicaSet
+	if objs, ok, err := c.cachedObjects(ctx, gvrReplicaSets, namespace); ok && err == nil {
+		out = make([]ReplicaSet, 0, len(objs))
+		for _, o := range objs {
+			if r, ok := o.(*appsv1.ReplicaSet); ok {
+				out = append(out, toReplicaSet(r))
+			}
 		}
-		out = append(out, ReplicaSet{
-			Name:      r.Name,
-			Namespace: r.Namespace,
-			Desired:   desired,
-			Current:   r.Status.Replicas,
-			Ready:     r.Status.ReadyReplicas,
-			Age:       humanAge(r.CreationTimestamp.Time),
-		})
+	} else {
+		list, lerr := c.clientset.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		out = make([]ReplicaSet, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toReplicaSet(&list.Items[i]))
+		}
 	}
 	sortByNsName(len(out),
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
@@ -607,32 +758,46 @@ type CronJob struct {
 	Age          string
 }
 
+// toCronJob flattens a batchv1.CronJob for display.
+func toCronJob(cj *batchv1.CronJob) CronJob {
+	suspend := false
+	if cj.Spec.Suspend != nil {
+		suspend = *cj.Spec.Suspend
+	}
+	last := "<none>"
+	if cj.Status.LastScheduleTime != nil {
+		last = humanAge(cj.Status.LastScheduleTime.Time)
+	}
+	return CronJob{
+		Name:         cj.Name,
+		Namespace:    cj.Namespace,
+		Schedule:     cj.Spec.Schedule,
+		Suspend:      suspend,
+		Active:       len(cj.Status.Active),
+		LastSchedule: last,
+		Age:          humanAge(cj.CreationTimestamp.Time),
+	}
+}
+
 // CronJobs lists cronjobs in a namespace ("" = all namespaces).
 func (c *Client) CronJobs(ctx context.Context, namespace string) ([]CronJob, error) {
-	list, err := c.clientset.BatchV1().CronJobs(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]CronJob, 0, len(list.Items))
-	for i := range list.Items {
-		cj := &list.Items[i]
-		suspend := false
-		if cj.Spec.Suspend != nil {
-			suspend = *cj.Spec.Suspend
+	var out []CronJob
+	if objs, ok, err := c.cachedObjects(ctx, gvrCronJobs, namespace); ok && err == nil {
+		out = make([]CronJob, 0, len(objs))
+		for _, o := range objs {
+			if cj, ok := o.(*batchv1.CronJob); ok {
+				out = append(out, toCronJob(cj))
+			}
 		}
-		last := "<none>"
-		if cj.Status.LastScheduleTime != nil {
-			last = humanAge(cj.Status.LastScheduleTime.Time)
+	} else {
+		list, lerr := c.clientset.BatchV1().CronJobs(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
 		}
-		out = append(out, CronJob{
-			Name:         cj.Name,
-			Namespace:    cj.Namespace,
-			Schedule:     cj.Spec.Schedule,
-			Suspend:      suspend,
-			Active:       len(cj.Status.Active),
-			LastSchedule: last,
-			Age:          humanAge(cj.CreationTimestamp.Time),
-		})
+		out = make([]CronJob, 0, len(list.Items))
+		for i := range list.Items {
+			out = append(out, toCronJob(&list.Items[i]))
+		}
 	}
 	sortByNsName(len(out),
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
@@ -732,36 +897,54 @@ type Event struct {
 	Message   string
 }
 
+// toEvent flattens a corev1.Event for display.
+func toEvent(e *corev1.Event) Event {
+	obj := e.InvolvedObject.Name
+	if e.InvolvedObject.Kind != "" {
+		obj = e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name
+	}
+	count := e.Count
+	if count == 0 {
+		count = 1
+	}
+	return Event{
+		Name:      e.Name,
+		Namespace: e.Namespace,
+		Type:      e.Type,
+		Reason:    e.Reason,
+		Object:    obj,
+		Count:     count,
+		LastSeen:  humanAge(eventTime(e)),
+		Message:   strings.ReplaceAll(e.Message, "\n", " "),
+	}
+}
+
 // Events lists events in a namespace ("" = all namespaces), newest first.
 func (c *Client) Events(ctx context.Context, namespace string) ([]Event, error) {
-	list, err := c.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
+	var items []*corev1.Event
+	if objs, ok, err := c.cachedObjects(ctx, gvrEvents, namespace); ok && err == nil {
+		items = make([]*corev1.Event, 0, len(objs))
+		for _, o := range objs {
+			if e, ok := o.(*corev1.Event); ok {
+				items = append(items, e)
+			}
+		}
+	} else {
+		list, lerr := c.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{})
+		if lerr != nil {
+			return nil, lerr
+		}
+		items = make([]*corev1.Event, 0, len(list.Items))
+		for i := range list.Items {
+			items = append(items, &list.Items[i])
+		}
 	}
-	sort.Slice(list.Items, func(i, j int) bool {
-		return eventTime(&list.Items[i]).After(eventTime(&list.Items[j]))
+	sort.Slice(items, func(i, j int) bool {
+		return eventTime(items[i]).After(eventTime(items[j]))
 	})
-	out := make([]Event, 0, len(list.Items))
-	for i := range list.Items {
-		e := &list.Items[i]
-		obj := e.InvolvedObject.Name
-		if e.InvolvedObject.Kind != "" {
-			obj = e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name
-		}
-		count := e.Count
-		if count == 0 {
-			count = 1
-		}
-		out = append(out, Event{
-			Name:      e.Name,
-			Namespace: e.Namespace,
-			Type:      e.Type,
-			Reason:    e.Reason,
-			Object:    obj,
-			Count:     count,
-			LastSeen:  humanAge(eventTime(e)),
-			Message:   strings.ReplaceAll(e.Message, "\n", " "),
-		})
+	out := make([]Event, 0, len(items))
+	for _, e := range items {
+		out = append(out, toEvent(e))
 	}
 	return out, nil
 }
