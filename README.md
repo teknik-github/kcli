@@ -33,6 +33,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Help overlay** (`?`): every key binding + the `:jump` aliases.
 - **Optional config file**: default namespace, refresh cadence, accent colour, and custom `:jump` aliases (`~/.config/kcli/config.yaml`).
 - **Multi-select** (`Space`): mark rows and bulk-delete them in one confirmation (Delete-capable views).
+- **Optional startup splash**: play a `.gif` as colored half-blocks on launch (`$KCLI_SPLASH`); replay with `a`.
 
 ---
 
@@ -98,6 +99,14 @@ The active context is shown in the header and starts as the kubeconfig's current
 
 kcli reads an optional YAML config from `$KCLI_CONFIG`, else `$XDG_CONFIG_HOME/kcli/config.yaml`, else `~/.config/kcli/config.yaml`. A missing or malformed file is ignored (defaults apply) — it never blocks startup.
 
+### Startup splash (optional)
+
+Set `$KCLI_SPLASH` to a `.gif` path and kcli plays it as a splash on launch, rendered as colored half-blocks (`▀`, two sub-pixels per cell — truecolor terminal recommended). Any key skips it; it also auto-dismisses after one loop. Press `a` to replay it. Unset (or a bad path) simply skips the splash.
+
+```bash
+KCLI_SPLASH=~/pics/logo.gif kcli
+```
+
 ```yaml
 namespace: default        # startup namespace ("" / omitted = all namespaces)
 refreshInterval: 5s        # auto-refresh cadence (>= 1s; default 3s)
@@ -139,6 +148,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `n`                 | Namespace picker (`<all>` for every namespace)                 |
 | `x`                 | Context picker (switch cluster/context; `*` marks the current) |
 | `r`                 | Manual refresh                                                  |
+| `a`                 | Replay the startup splash (when `$KCLI_SPLASH` is set)          |
 | `l`                 | Logs (follow; inside: `p` toggle previous, `/` grep, `q`/`Esc` close) |
 | `e`                 | Interactive exec shell                                          |
 | `E`                 | Edit YAML in `$EDITOR` and apply on save                        |
@@ -221,6 +231,7 @@ dynamic.go       jumpToView / jumpDynamic / setDynamicView (generic CRD view)
 help.go          the `?` help overlay
 edit.go          edit YAML in $EDITOR and apply
 graph.go         sampler + CPU/MEM sparkline rendering
+splash.go        optional startup GIF splash (half-block renderer + player)
 exec.go          suspend TUI → exec → resume
 portforward.go   port-forward state + the built-in Port-Fwd view (pods & services)
 ```

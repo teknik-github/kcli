@@ -6,3 +6,6 @@
 # Local tooling / editor / OS
 .claude/
 .DS_Store
+
+# Splash GIF assets (opt-in via $KCLI_SPLASH; not bundled to keep the repo lean)
+assets/

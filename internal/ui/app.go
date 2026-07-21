@@ -4,6 +4,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -45,6 +46,10 @@ type App struct {
 
 	graphStop  chan struct{}      // stops the live graph sampler when non-nil
 	logsCancel context.CancelFunc // cancels the active log stream when non-nil
+
+	splash     *splashAnim // decoded startup GIF, nil unless KCLI_SPLASH is set
+	splashView *splashView // active splash primitive while playing
+	splashing  bool        // true while the splash is on screen
 
 	rows      []Row          // current view's data, in fetch order
 	forwards  []*portForward // active background port-forwards
@@ -133,6 +138,15 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 	}
 	client.SetOnChange(a.onChange)
 
+	// Optional startup splash: a GIF path in $KCLI_SPLASH is decoded up front so
+	// it can play the moment the event loop starts. A bad/missing file is
+	// silently ignored — the splash is cosmetic.
+	if p := os.Getenv("KCLI_SPLASH"); p != "" {
+		if anim, err := loadGIF(p); err == nil {
+			a.splash = anim
+		}
+	}
+
 	return a
 }
 
@@ -145,6 +159,9 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 func (a *App) Run() error {
 	go a.autoRefresh()
 	go a.watchLoop()
+	if a.splash != nil {
+		go a.playSplash()
+	}
 	return a.tv.Run()
 }
 

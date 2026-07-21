@@ -177,6 +177,11 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 			a.confirmDrain()
 		}
 		return nil
+	case 'a':
+		if a.splash != nil && !a.splashing {
+			go a.playSplash() // replay the startup splash
+		}
+		return nil
 	}
 	return event
 }
