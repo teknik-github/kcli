@@ -223,7 +223,11 @@ func (a *App) autoRefresh() {
 // context switch (which reassigns a.client on the UI goroutine) cannot race with
 // it.
 func (a *App) refresh() {
-	a.tv.QueueUpdate(a.loadCurrentView)
+	// QueueUpdateDraw (not QueueUpdate) so the redraw happens after loadCurrentView
+	// runs: the Local (Port-Fwd) branch updates rows synchronously and would
+	// otherwise leave the screen stale until the next input event. Cluster views
+	// redraw again from their async fetch — one extra repaint, harmless.
+	a.tv.QueueUpdateDraw(a.loadCurrentView)
 }
 
 // loadCurrentView captures the active view, client, and namespace on the UI
@@ -278,6 +282,7 @@ func (a *App) switchView(i int) {
 	}
 	a.viewIdx = i
 	a.rows = nil
+	a.filter = ""  // filter is per-view; a Services filter must not hide Port-Fwd rows
 	a.sortCol = -1 // sort is per-view; reset on switch
 	a.sortDesc = false
 	a.clearMarks() // marks are per-view identities
