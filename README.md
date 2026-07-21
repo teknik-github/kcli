@@ -30,6 +30,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Safe secrets**: values are always masked (`<redacted: N bytes>`) when describing; plain-text reveal (`v`) is a separate, confirmed action.
 - **Context switching** (`x`): switch cluster/context at runtime, no restart.
 - **Help overlay** (`?`): every key binding + the `:jump` aliases.
+- **Optional config file**: default namespace, refresh cadence, accent colour, and custom `:jump` aliases (`~/.config/kcli/config.yaml`).
 
 ---
 
@@ -90,6 +91,21 @@ kcli resolves the cluster connection in this order:
 3. **In-cluster config** (when running as a Pod)
 
 The active context is shown in the header and starts as the kubeconfig's current-context. Switch to another context at runtime with `x`.
+
+### Config file (optional)
+
+kcli reads an optional YAML config from `$KCLI_CONFIG`, else `$XDG_CONFIG_HOME/kcli/config.yaml`, else `~/.config/kcli/config.yaml`. A missing or malformed file is ignored (defaults apply) — it never blocks startup.
+
+```yaml
+namespace: default        # startup namespace ("" / omitted = all namespaces)
+refreshInterval: 5s        # auto-refresh cadence (>= 1s; default 3s)
+theme: green               # accent colour name for tabs/header/selection
+aliases:                   # custom :jump aliases -> resource name
+  p: pods
+  dp: deployments
+```
+
+Custom aliases are expanded before the built-in resolution, so `:p` → Pods, and any name the cluster knows (including CRDs) still works.
 
 ---
 

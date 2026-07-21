@@ -31,8 +31,9 @@ There is no permanent test suite. Two ways to verify changes:
 
 ## Architecture
 
-Two packages under `internal/`:
+Three packages under `internal/`:
 
+- **`internal/config`** — optional user config (`$KCLI_CONFIG` → `$XDG_CONFIG_HOME/kcli/config.yaml` → `~/.config/kcli/config.yaml`). Best-effort: a missing/malformed file yields defaults, never a startup error. Supplies startup namespace, refresh cadence (`baseRefresh`), accent colour, and custom `:jump` aliases. `main.go` loads it and passes it to `NewApp`.
 - **`internal/k8s`** — all cluster access (`client-go`). `Client` wraps a typed `clientset`, an optional `*metricsv.Clientset` (best-effort), and the `*rest.Config` (kept for streaming subresources). Each resource has a display struct (`Pod`, `Deployment`, …) flattened for the table, plus a lister that sorts by `(namespace, name)`. `Describe`/`Delete`/`Scale` are `kind`-string dispatchers. `exec.go` and `portforward.go` hold the SPDY streaming subresources.
 - **`internal/ui`** — the `tview` app. `App` (in `app.go`) owns the widget tree and mutable state.
 

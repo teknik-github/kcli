@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/teknik-github/kcli/internal/config"
 	"github.com/teknik-github/kcli/internal/k8s"
 	"github.com/teknik-github/kcli/internal/ui"
 )
@@ -16,7 +17,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	app := ui.NewApp(client)
+	cfg, _ := config.Load()
+	app := ui.NewApp(client, cfg)
 	if err := app.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "kcli: %v\n", err)
 		os.Exit(1)

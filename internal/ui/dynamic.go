@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -13,6 +14,11 @@ import (
 // resources resolve locally; anything else (CRDs, built-ins without an explicit
 // view) falls back to a discovery lookup and opens the generic Dynamic view.
 func (a *App) jumpToView(query string) {
+	// A user-configured alias is expanded first, so "p" -> "pods" etc. reach the
+	// registered view (or a CRD) through the normal resolution below.
+	if canon, ok := a.userAliases[strings.ToLower(strings.TrimSpace(query))]; ok {
+		query = canon
+	}
 	if i, ok := resolveView(query); ok {
 		if resourceViews[i].Local {
 			a.gotoForwardsView() // Port-Fwd: route through so `q` remembers the back-target

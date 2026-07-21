@@ -13,10 +13,9 @@ import (
 	"github.com/rivo/tview"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/teknik-github/kcli/internal/config"
 	"github.com/teknik-github/kcli/internal/k8s"
 )
-
-const refreshInterval = 3 * time.Second
 
 // App holds the tview application and the mutable UI state.
 type App struct {
@@ -57,19 +56,31 @@ type App struct {
 	dynIdx        int
 	dynGVR        schema.GroupVersionResource
 	dynNamespaced bool
+
+	// From the user config file (all with sane defaults when unset).
+	baseRefresh time.Duration     // auto-refresh cadence floor
+	accent      string            // tview colour name for tabs/header highlights
+	userAliases map[string]string // custom :jump aliases -> resource name
 }
 
-// NewApp wires up the widget tree and key bindings.
-func NewApp(client *k8s.Client) *App {
+// NewApp wires up the widget tree and key bindings. cfg may be nil; it carries
+// the optional user config (default namespace, refresh cadence, accent, aliases).
+func NewApp(client *k8s.Client, cfg *config.Config) *App {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
 	a := &App{
-		tv:        tview.NewApplication(),
-		client:    client,
-		viewIdx:   0,  // start on the first view (Pods)
-		namespace: "", // start across all namespaces
-		sortCol:   -1, // fetch order until the user sorts
+		tv:          tview.NewApplication(),
+		client:      client,
+		viewIdx:     0,             // start on the first view (Pods)
+		namespace:   cfg.Namespace, // configured startup namespace ("" = all)
+		sortCol:     -1,            // fetch order until the user sorts
+		baseRefresh: cfg.Refresh(), // configured cadence (>= 1s, default 3s)
+		accent:      cfg.Accent(),  // configured accent colour name
+		userAliases: cfg.NormalizedAliases(),
 	}
 	a.dynIdx = len(resourceViews) - 1 // the reserved Dynamic slot is appended last
-	a.refreshEvery.Store(int64(refreshInterval))
+	a.refreshEvery.Store(int64(a.baseRefresh))
 
 	a.logo = tview.NewTextView().SetDynamicColors(true).SetWrap(false).
 		SetTextAlign(tview.AlignRight) // pin the banner to the top-right corner, k9s-style
@@ -84,7 +95,7 @@ func NewApp(client *k8s.Client) *App {
 		SetSelectable(true, false).
 		SetFixed(1, 0)
 	a.table.SetSelectedStyle(tcell.StyleDefault.
-		Background(tcell.ColorDarkCyan).Foreground(tcell.ColorWhite))
+		Background(accentColor(a.accent)).Foreground(tcell.ColorWhite))
 
 	// Top band, k9s-style: the info block grows to fill the left while the logo
 	// keeps its natural width pinned to the right. The band is as tall as the
@@ -124,14 +135,14 @@ func (a *App) Run() error {
 // a faster view stays responsive because switchView triggers its own reload.
 func (a *App) autoRefresh() {
 	a.refresh()
-	ticker := time.NewTicker(refreshInterval)
+	ticker := time.NewTicker(a.baseRefresh)
 	defer ticker.Stop()
 	var elapsed time.Duration
 	for range ticker.C {
-		elapsed += refreshInterval
+		elapsed += a.baseRefresh
 		want := time.Duration(a.refreshEvery.Load())
-		if want < refreshInterval {
-			want = refreshInterval
+		if want < a.baseRefresh {
+			want = a.baseRefresh
 		}
 		if elapsed >= want {
 			elapsed = 0
@@ -216,7 +227,7 @@ func (a *App) switchView(i int) {
 // publishCadence stores the active view's auto-refresh interval for the ticker
 // goroutine to read. Called on the UI goroutine whenever the view changes.
 func (a *App) publishCadence() {
-	want := refreshInterval
+	want := a.baseRefresh
 	if iv := resourceViews[a.viewIdx].RefreshInterval; iv > want {
 		want = iv
 	}
@@ -249,26 +260,35 @@ func (a *App) drawHeader() {
 		ns = "-" // namespace is irrelevant for cluster-scoped resources
 	}
 	lines := []string{
-		hdrLine("Context", a.client.Context),
-		hdrLine("Namespace", ns),
-		hdrLine("Resource", fmt.Sprintf("%s (%d)", a.view().Title, a.rowCount())),
+		a.hdrLine("Context", a.client.Context),
+		a.hdrLine("Namespace", ns),
+		a.hdrLine("Resource", fmt.Sprintf("%s (%d)", a.view().Title, a.rowCount())),
 	}
 	if a.filter != "" {
-		lines = append(lines, hdrLine("Filter", a.filter))
+		lines = append(lines, a.hdrLine("Filter", a.filter))
 	}
 	if s := a.sortLabel(); s != "" {
-		lines = append(lines, hdrLine("Sort", s))
+		lines = append(lines, a.hdrLine("Sort", s))
 	}
 	if n := len(a.forwards); n > 0 {
-		lines = append(lines, hdrLine("Forwards", fmt.Sprintf("⇄ %d", n)))
+		lines = append(lines, a.hdrLine("Forwards", fmt.Sprintf("⇄ %d", n)))
 	}
 	a.header.SetText(strings.Join(lines, "\n"))
 }
 
 // hdrLine formats one info-block row with the label padded to a fixed width so
-// the values line up in a column.
-func hdrLine(label, value string) string {
-	return fmt.Sprintf("[aqua::b]%-10s[-::-] [green]%s[-]", label+":", value)
+// the values line up in a column. The label uses the configured accent colour.
+func (a *App) hdrLine(label, value string) string {
+	return fmt.Sprintf("[%s::b]%-10s[-::-] [green]%s[-]", a.accent, label+":", value)
+}
+
+// accentColor maps a tview colour name to a tcell.Color for widget styling
+// (the selected-row background), falling back to dark cyan on an unknown name.
+func accentColor(name string) tcell.Color {
+	if c := tcell.GetColor(name); c != tcell.ColorDefault {
+		return c
+	}
+	return tcell.ColorDarkCyan
 }
 
 // drawTabs renders the resource tab bar with the active view highlighted.
@@ -287,17 +307,17 @@ func (a *App) drawTabs() {
 			label = fmt.Sprintf(" %d:%s ", i+1, v.Title)
 		}
 		if i == a.viewIdx {
-			line += "[black:aqua:b]" + label + "[-:-:-]"
+			line += fmt.Sprintf("[black:%s:b]%s[-:-:-]", a.accent, label)
 		} else {
-			line += "[aqua]" + label + "[-]"
+			line += fmt.Sprintf("[%s]%s[-]", a.accent, label)
 		}
 		line += " "
 	}
 	switch {
 	case a.view().Local: // e.g. Port-Fwd: show it separately with a back hint
-		line += fmt.Sprintf("  [black:aqua:b] %s [-:-:-]  [gray]q back[-]", a.view().Title)
+		line += fmt.Sprintf("  [black:%s:b] %s [-:-:-]  [gray]q back[-]", a.accent, a.view().Title)
 	case a.view().Hidden: // e.g. a Dynamic/CRD view reached via :jump
-		line += fmt.Sprintf("  [black:aqua:b] %s [-:-:-]  [gray]:jump / tab to leave[-]", a.view().Title)
+		line += fmt.Sprintf("  [black:%s:b] %s [-:-:-]  [gray]:jump / tab to leave[-]", a.accent, a.view().Title)
 	}
 	a.tabs.SetText(line)
 }
