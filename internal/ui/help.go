@@ -39,7 +39,7 @@ func (a *App) showHelp() {
 		{"E", "edit YAML in $EDITOR and apply"},
 		{"g", "live CPU/MEM graph"},
 		{"f", "port-forward (pods and services)"},
-		{"F", "open the Port-Fwd view"},
+		{"F", "open the Port-Fwd view (enter: live log, d: stop)"},
 		{"s", "scale"},
 		{"R", "rollout restart"},
 		{"u", "rollout undo (previous revision)"},

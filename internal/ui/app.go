@@ -46,6 +46,7 @@ type App struct {
 
 	graphStop  chan struct{}      // stops the live graph sampler when non-nil
 	logsCancel context.CancelFunc // cancels the active log stream when non-nil
+	pflogStop  chan struct{}      // stops the port-forward log view refresh when non-nil
 
 	splash           *splashAnim   // decoded GIF, nil unless KCLI_SPLASH is set
 	splashView       *splashView   // active corner animation primitive while showing
@@ -386,8 +387,8 @@ func (a *App) drawTabs() {
 		line += " "
 	}
 	switch {
-	case a.view().Local: // e.g. Port-Fwd: show it separately with a back hint
-		line += fmt.Sprintf("  [black:%s:b] %s [-:-:-]  [gray]q back[-]", a.accent, a.view().Title)
+	case a.view().Local: // e.g. Port-Fwd: show it separately with its own hints
+		line += fmt.Sprintf("  [black:%s:b] %s [-:-:-]  [gray]enter log · d stop · q back[-]", a.accent, a.view().Title)
 	case a.view().Hidden: // e.g. a Dynamic/CRD view reached via :jump
 		line += fmt.Sprintf("  [black:%s:b] %s [-:-:-]  [gray]:jump / tab to leave[-]", a.accent, a.view().Title)
 	}

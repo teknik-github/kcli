@@ -1,16 +1,60 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
+
+// pfLog is a bounded, line-oriented, concurrency-safe sink for a port-forward's
+// out/errOut streams (the "Forwarding from …" notices and per-connection
+// errors). The forwarding goroutine writes; the UI reads via text().
+type pfLog struct {
+	mu    sync.Mutex
+	lines []string
+	buf   []byte // accumulates bytes until a newline completes a line
+}
+
+const pfLogMaxLines = 500
+
+func (l *pfLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.buf = append(l.buf, p...)
+	for {
+		i := bytes.IndexByte(l.buf, '\n')
+		if i < 0 {
+			break
+		}
+		l.lines = append(l.lines, string(l.buf[:i]))
+		l.buf = append([]byte(nil), l.buf[i+1:]...)
+	}
+	if len(l.lines) > pfLogMaxLines {
+		l.lines = l.lines[len(l.lines)-pfLogMaxLines:]
+	}
+	return len(p), nil
+}
+
+// text returns the accumulated log, including any trailing partial line.
+func (l *pfLog) text() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := strings.Join(l.lines, "\n")
+	if len(l.buf) > 0 {
+		if out != "" {
+			out += "\n"
+		}
+		out += string(l.buf)
+	}
+	return out
+}
 
 // portForward tracks one background port-forward. All fields are mutated only
 // on the UI goroutine (via QueueUpdateDraw), so no locking is needed.
@@ -21,6 +65,7 @@ type portForward struct {
 	stopCh  chan struct{}
 	status  string // "starting", "forwarding", "closed", "error: ..."
 	stopped bool
+	log     *pfLog // captured out/errOut, shown in the log view
 }
 
 // showPortForwardDialog prompts for the port mapping to forward to the selected
@@ -89,6 +134,7 @@ func (a *App) startPortForward(ns, name string, ports []string) {
 		ports:  ports,
 		stopCh: make(chan struct{}),
 		status: "starting",
+		log:    &pfLog{},
 	}
 	a.nextFwdID++
 	a.forwards = append(a.forwards, pf)
@@ -109,7 +155,7 @@ func (a *App) startPortForward(ns, name string, ports []string) {
 		})
 	}()
 	go func() {
-		err := cl.PortForward(ns, name, ports, io.Discard, io.Discard, pf.stopCh, readyCh)
+		err := cl.PortForward(ns, name, ports, pf.log, pf.log, pf.stopCh, readyCh)
 		a.tv.QueueUpdateDraw(func() {
 			if pf.stopped {
 				return // torn down on purpose
@@ -176,23 +222,87 @@ func (a *App) backView() {
 
 // stopSelectedForward tears down the forward under the cursor (Port-Fwd view).
 func (a *App) stopSelectedForward() {
-	row, ok := a.selectedRow()
-	if !ok || len(row.Cells) == 0 {
+	pf := a.selectedForward()
+	if pf == nil {
 		return
 	}
-	id, err := strconv.Atoi(row.Cells[0])
-	if err != nil {
-		return
-	}
-	for _, pf := range a.forwards {
-		if pf.id == id {
-			a.stopForward(pf)
-			break
-		}
-	}
+	a.stopForward(pf)
 	a.rows = a.forwardRows()
 	a.drawHeader()
 	a.drawTable()
+}
+
+// selectedForward returns the *portForward for the row under the cursor (keyed
+// by the ID column, which survives filter/sort), or nil.
+func (a *App) selectedForward() *portForward {
+	row, ok := a.selectedRow()
+	if !ok || len(row.Cells) == 0 {
+		return nil
+	}
+	id, err := strconv.Atoi(row.Cells[0])
+	if err != nil {
+		return nil
+	}
+	for _, pf := range a.forwards {
+		if pf.id == id {
+			return pf
+		}
+	}
+	return nil
+}
+
+// showForwardLog opens a live view of the selected forward's captured output —
+// the "Forwarding from …" notices and any per-connection errors — so its
+// progress is visible. It refreshes on a ticker until closed (q/esc).
+func (a *App) showForwardLog() {
+	pf := a.selectedForward()
+	if pf == nil {
+		return
+	}
+	view := tview.NewTextView().SetScrollable(true).SetWrap(true)
+	view.SetBorder(true).SetTitle(fmt.Sprintf(" forward %s/%s [%s]  q/esc close ",
+		pf.ns, pf.pod, strings.Join(pf.ports, " ")))
+	render := func() {
+		body := pf.log.text()
+		if body == "" {
+			body = "(no output yet — the forwarder logs here once traffic flows)"
+		}
+		view.SetText(fmt.Sprintf("status: %s\n\n%s", pf.status, body))
+		view.ScrollToEnd()
+	}
+	render()
+	view.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
+		if e.Key() == tcell.KeyEscape || e.Rune() == 'q' {
+			a.stopPFLog()
+			a.closeModal("pflog")
+			return nil
+		}
+		return e
+	})
+	a.openModalFull("pflog", view)
+
+	stop := make(chan struct{})
+	a.pflogStop = stop
+	go func() {
+		t := time.NewTicker(500 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				a.tv.QueueUpdateDraw(render)
+			}
+		}
+	}()
+}
+
+// stopPFLog halts the port-forward log view's refresh ticker, if running.
+func (a *App) stopPFLog() {
+	if a.pflogStop != nil {
+		close(a.pflogStop)
+		a.pflogStop = nil
+	}
 }
 
 // stopForward tears a forward down and drops it from the registry.

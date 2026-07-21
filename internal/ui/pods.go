@@ -58,7 +58,7 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 	case tcell.KeyEnter:
 		if a.view().Local {
-			a.stopSelectedForward() // Port-Fwd view: Enter stops the forward
+			a.showForwardLog() // Port-Fwd view: Enter shows the forward's log
 		} else {
 			a.showDetail()
 		}

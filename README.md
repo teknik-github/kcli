@@ -187,7 +187,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | Secrets       | edit, delete, **reveal** (`v`)                        |
 | Ingresses, Jobs, CronJobs, ConfigMaps, PVCs | edit, delete            |
 | Events        | read-only (`Enter` for YAML)                          |
-| Port-Fwd      | `Enter`/`d` stop the selected forward; `q` go back    |
+| Port-Fwd      | `Enter` view the forward's live log; `d` stop it; `q` go back |
 | Dynamic/CRD (`:`) | read-only (`Enter` for YAML); `Tab`/`:`/`q` to leave |
 
 ### Feature notes
@@ -200,7 +200,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 - **Rollout restart** (`R`): stamps the `kubectl.kubernetes.io/restartedAt` annotation — identical to `kubectl rollout restart`.
 - **Rollout undo** (`u`): rolls back to the previous revision, reconstructed client-side (no server endpoint exists) — Deployments restore the prior ReplicaSet's pod template; StatefulSets/DaemonSets re-apply the previous `ControllerRevision`. Reports "no previous revision" when there is nothing to undo.
 - **Reveal secret** (`v`): after a confirmation, decodes and shows the secret's values in plain text — deliberately separate from `describe`, which always masks.
-- **Port-forward** works on Pods and Services (a Service resolves to a Ready backing pod first). It runs in the background and stays alive after the dialog closes; the header shows `⇄ N`. Manage/stop forwards from the Port-Fwd view (`F`).
+- **Port-forward** works on Pods and Services (a Service resolves to a Ready backing pod first, translating the service port to the pod's targetPort). It runs in the background and stays alive after the dialog closes; the header shows `⇄ N`. Manage forwards from the Port-Fwd view (`F`): `Enter` opens a live log of the forwarder's output (the "Forwarding from …" notices and any connection errors), `d` stops the selected forward.
 - **Events** are sorted newest-first and poll more slowly than other views; TYPE `Normal` is green, `Warning` is red.
 - **Multi-select** (`Space`): marks the current row (highlighted background) in any Delete-capable view; `d` then deletes every marked row after one confirmation showing the count. Marks are keyed by namespace/name so they survive filter and sort, and clear on any view/namespace/context switch.
 - **Context switch** (`x`): rebuilds the client for the chosen kubeconfig context and reloads; the namespace, filter, and sort reset since they are cluster-specific. In-flight actions and background port-forwards keep running against the cluster they were started on.
