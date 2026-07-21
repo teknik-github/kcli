@@ -53,6 +53,7 @@ type App struct {
 	splashStop       chan struct{} // closed to stop the corner animation loop
 	splashW, splashH int           // corner box size in cells (KCLI_SPLASH_SIZE)
 	splashMode       int           // glyph mode (KCLI_SPLASH_MODE): quadrant/sextant
+	sixelEnabled     bool          // KCLI_SPLASH_SIXEL: enable full-screen Sixel playback
 
 	rows      []Row          // current view's data, in fetch order
 	forwards  []*portForward // active background port-forwards
@@ -149,6 +150,7 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 			a.splash = anim
 			a.splashW, a.splashH = splashSize()
 			a.splashMode = splashMode()
+			a.sixelEnabled = os.Getenv("KCLI_SPLASH_SIXEL") == "1"
 		} else {
 			// Surface why the splash won't show instead of failing silently;
 			// printed before the TUI starts, so it's visible after quitting.

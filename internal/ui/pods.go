@@ -182,6 +182,11 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 			a.toggleSplash() // show/hide the corner animation
 		}
 		return nil
+	case 'A':
+		if a.sixelEnabled {
+			a.showSixel()
+		}
+		return nil
 	}
 	return event
 }
