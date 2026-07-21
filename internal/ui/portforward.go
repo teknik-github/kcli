@@ -92,7 +92,10 @@ func (a *App) startPortForward(ns, name string, ports []string) {
 	}
 	a.nextFwdID++
 	a.forwards = append(a.forwards, pf)
-	a.drawHeader()
+	// redrawForwards (not just drawHeader) so the row shows immediately when the
+	// forward is added while the Port-Fwd view is already active — e.g. after an
+	// async Service→pod resolve that finished while the user was on that view.
+	a.redrawForwards()
 
 	cl := a.client // pin the cluster this forward runs against, in case the context switches
 	readyCh := make(chan struct{})
