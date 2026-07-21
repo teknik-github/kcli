@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -14,14 +15,29 @@ import (
 )
 
 const (
-	// splashMaxDim caps the pre-scaled frame size held in memory; the Draw step
-	// scales further down. 240 px is ample for half-block output.
-	splashMaxDim = 240
-	// splashCols/splashRows size the corner box (cells). Two sub-pixels per row
-	// make splashCols × (splashRows*2) ≈ square for a square GIF.
-	splashCols = 30
-	splashRows = 15
+	// splashMaxDim caps the pre-scaled source frame held in memory; Draw
+	// area-averages from it down to the box. Kept well above the box so the
+	// averaged result stays detailed.
+	splashMaxDim = 320
+	// default corner box size in cells; override via KCLI_SPLASH_SIZE="WxH".
+	// Two sub-pixels per row make cols × (rows*2) ≈ square for a square GIF.
+	defaultSplashCols = 40
+	defaultSplashRows = 20
 )
+
+// splashSize returns the corner box size in cells, honouring KCLI_SPLASH_SIZE
+// ("WxH", e.g. "60x30"), else the defaults. Bigger = more detail, more screen.
+func splashSize() (cols, rows int) {
+	cols, rows = defaultSplashCols, defaultSplashRows
+	if s := os.Getenv("KCLI_SPLASH_SIZE"); s != "" {
+		var w, h int
+		if _, err := fmt.Sscanf(s, "%dx%d", &w, &h); err == nil &&
+			w >= 8 && h >= 4 && w <= 200 && h <= 100 {
+			cols, rows = w, h
+		}
+	}
+	return cols, rows
+}
 
 // splashAnim is a decoded GIF: composited, opaque, pre-scaled RGBA frames with
 // their inter-frame delays.
@@ -56,7 +72,7 @@ func loadGIF(path string) (*splashAnim, error) {
 	for i, frame := range g.Image {
 		draw.Draw(canvas, frame.Bounds(), frame, frame.Bounds().Min, draw.Over)
 
-		anim.frames = append(anim.frames, scaleNearest(canvas, sw, sh))
+		anim.frames = append(anim.frames, scaleAvg(canvas, sw, sh))
 		d := time.Duration(g.Delay[i]) * 10 * time.Millisecond
 		if d <= 0 {
 			d = 100 * time.Millisecond
@@ -89,16 +105,40 @@ func scaleToFit(w, h, maxW, maxH int) float64 {
 	return s
 }
 
-// scaleNearest nearest-neighbour scales src into a new w×h RGBA (crisp for the
-// pixel-art GIFs this is aimed at).
-func scaleNearest(src *image.RGBA, w, h int) *image.RGBA {
+// scaleAvg box-averages src into a new w×h RGBA: each destination pixel is the
+// mean of the source pixels it covers. This is a proper antialiased downscale —
+// far clearer than nearest-neighbour at the low resolutions half-blocks use.
+func scaleAvg(src *image.RGBA, w, h int) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	b := src.Bounds()
+	sw, sh := b.Dx(), b.Dy()
 	for y := 0; y < h; y++ {
-		sy := b.Min.Y + y*b.Dy()/h
+		sy0 := b.Min.Y + y*sh/h
+		sy1 := b.Min.Y + (y+1)*sh/h
+		if sy1 <= sy0 {
+			sy1 = sy0 + 1
+		}
 		for x := 0; x < w; x++ {
-			sx := b.Min.X + x*b.Dx()/w
-			dst.SetRGBA(x, y, src.RGBAAt(sx, sy))
+			sx0 := b.Min.X + x*sw/w
+			sx1 := b.Min.X + (x+1)*sw/w
+			if sx1 <= sx0 {
+				sx1 = sx0 + 1
+			}
+			var r, g, bl, a, n uint32
+			for sy := sy0; sy < sy1; sy++ {
+				for sx := sx0; sx < sx1; sx++ {
+					c := src.RGBAAt(sx, sy)
+					r += uint32(c.R)
+					g += uint32(c.G)
+					bl += uint32(c.B)
+					a += uint32(c.A)
+					n++
+				}
+			}
+			if n == 0 {
+				n = 1
+			}
+			dst.SetRGBA(x, y, color.RGBA{uint8(r / n), uint8(g / n), uint8(bl / n), uint8(a / n)})
 		}
 	}
 	return dst
@@ -106,7 +146,7 @@ func scaleNearest(src *image.RGBA, w, h int) *image.RGBA {
 
 // splashView renders one frame of a splashAnim as colored half-blocks: each
 // cell is '▀' with the top sub-pixel as foreground and the bottom as
-// background, doubling vertical resolution. Any key invokes onDone (skip).
+// background, doubling vertical resolution. It is decorative (never focused).
 type splashView struct {
 	*tview.Box
 	anim  *splashAnim
@@ -130,35 +170,28 @@ func (s *splashView) Draw(screen tcell.Screen) {
 		s.frame = len(s.anim.frames) - 1
 	}
 
-	img := s.anim.frames[s.frame]
-	iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
+	src := s.anim.frames[s.frame]
+	iw, ih := src.Bounds().Dx(), src.Bounds().Dy()
 
-	// Fit the image into w columns × (h*2) sub-pixel rows, preserving aspect.
+	// Fit into w columns × (h*2) sub-pixel rows, preserving aspect, then
+	// area-average down to exactly that size for a clean, antialiased result.
 	sc := math.Min(float64(w)/float64(iw), float64(h*2)/float64(ih))
 	dw := max1(int(float64(iw) * sc))
 	dh := max1(int(float64(ih) * sc))
+	img := scaleAvg(src, dw, dh)
+
 	cellRows := (dh + 1) / 2
 	offX := x + (w-dw)/2
 	offY := y + (h-cellRows)/2
-
 	for cy := 0; cy < cellRows; cy++ {
 		for cx := 0; cx < dw; cx++ {
-			top := sampleFit(img, cx, 2*cy, dw, dh)
-			style := tcell.StyleDefault.Foreground(rgb(top)).Background(tcell.ColorBlack)
+			style := tcell.StyleDefault.Foreground(rgb(img.RGBAAt(cx, 2*cy))).Background(tcell.ColorBlack)
 			if 2*cy+1 < dh {
-				style = style.Background(rgb(sampleFit(img, cx, 2*cy+1, dw, dh)))
+				style = style.Background(rgb(img.RGBAAt(cx, 2*cy+1)))
 			}
 			screen.SetContent(offX+cx, offY+cy, '▀', nil, style)
 		}
 	}
-}
-
-// sampleFit nearest-samples the img pixel for target coord (tx,ty) in a dw×dh grid.
-func sampleFit(img *image.RGBA, tx, ty, dw, dh int) color.RGBA {
-	b := img.Bounds()
-	sx := b.Min.X + tx*b.Dx()/dw
-	sy := b.Min.Y + ty*b.Dy()/dh
-	return img.RGBAAt(sx, sy)
 }
 
 func rgb(c color.RGBA) tcell.Color {
@@ -205,13 +238,13 @@ func (a *App) toggleSplash() {
 // The nil spacers draw nothing, so the main view shows through around the box.
 func (a *App) splashCorner(view *splashView) tview.Primitive {
 	row := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(nil, 0, 1, false).           // left spacer
-		AddItem(view, splashCols, 0, false). // the box
-		AddItem(nil, 1, 0, false)            // right margin
+		AddItem(nil, 0, 1, false).          // left spacer
+		AddItem(view, a.splashW, 0, false). // the box
+		AddItem(nil, 1, 0, false)           // right margin
 	return tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(nil, 0, 1, false).          // top spacer
-		AddItem(row, splashRows, 0, false). // the box row
-		AddItem(nil, 1, 0, false)           // bottom margin (above the footer)
+		AddItem(nil, 0, 1, false).         // top spacer
+		AddItem(row, a.splashH, 0, false). // the box row
+		AddItem(nil, 1, 0, false)          // bottom margin (above the footer)
 }
 
 // animateSplash loops view's frames forever on the GIF's own timing until stop

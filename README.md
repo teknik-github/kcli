@@ -101,10 +101,12 @@ kcli reads an optional YAML config from `$KCLI_CONFIG`, else `$XDG_CONFIG_HOME/k
 
 ### Corner GIF animation (optional)
 
-Set `$KCLI_SPLASH` to a `.gif` path and kcli plays it, looping, in the bottom-right corner of the main screen — rendered as colored half-blocks (`▀`, two sub-pixels per cell — truecolor terminal recommended). It starts on launch and does not steal focus. Press `a` to toggle it off/on. Unset (or a bad path) simply shows nothing.
+Set `$KCLI_SPLASH` to a `.gif` path and kcli plays it, looping, in the bottom-right corner of the main screen — rendered as colored half-blocks (`▀`, two sub-pixels per cell — truecolor terminal recommended) with antialiased (area-averaged) downscaling. It starts on launch and does not steal focus. Press `a` to toggle it off/on. Unset (or a bad path) simply shows nothing.
+
+`$KCLI_SPLASH_SIZE` (`"WxH"` in cells, default `40x20`) sets the box size — larger means more detail but more screen. Half-blocks are inherently low-resolution; a bigger box is the main lever for clarity.
 
 ```bash
-KCLI_SPLASH=~/pics/logo.gif kcli
+KCLI_SPLASH=~/pics/logo.gif KCLI_SPLASH_SIZE=60x30 kcli
 ```
 
 ```yaml

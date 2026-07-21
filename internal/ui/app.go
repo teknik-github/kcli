@@ -47,10 +47,11 @@ type App struct {
 	graphStop  chan struct{}      // stops the live graph sampler when non-nil
 	logsCancel context.CancelFunc // cancels the active log stream when non-nil
 
-	splash     *splashAnim   // decoded GIF, nil unless KCLI_SPLASH is set
-	splashView *splashView   // active corner animation primitive while showing
-	splashing  bool          // true while the corner animation is on screen
-	splashStop chan struct{} // closed to stop the corner animation loop
+	splash           *splashAnim   // decoded GIF, nil unless KCLI_SPLASH is set
+	splashView       *splashView   // active corner animation primitive while showing
+	splashing        bool          // true while the corner animation is on screen
+	splashStop       chan struct{} // closed to stop the corner animation loop
+	splashW, splashH int           // corner box size in cells (KCLI_SPLASH_SIZE)
 
 	rows      []Row          // current view's data, in fetch order
 	forwards  []*portForward // active background port-forwards
@@ -145,6 +146,7 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 	if p := os.Getenv("KCLI_SPLASH"); p != "" {
 		if anim, err := loadGIF(p); err == nil {
 			a.splash = anim
+			a.splashW, a.splashH = splashSize()
 		}
 	}
 
