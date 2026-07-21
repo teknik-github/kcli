@@ -103,10 +103,14 @@ kcli reads an optional YAML config from `$KCLI_CONFIG`, else `$XDG_CONFIG_HOME/k
 
 Set `$KCLI_SPLASH` to a `.gif` path and kcli plays it, looping, in the bottom-right corner of the main screen. It is rendered with 2×2 Unicode **quadrant blocks** (four sub-pixels per cell, a best-fit glyph + fg/bg colour pair — like `chafa`) over antialiased (area-averaged) downscaling, which keeps it legible even in a small box. Truecolor terminal recommended. It starts on launch and does not steal focus. Press `a` to toggle it off/on. Unset (or a bad path) simply shows nothing.
 
-`$KCLI_SPLASH_SIZE` (`"WxH"` in cells, default `40x20`) sets the box size — larger means more detail but more screen. Half-blocks are inherently low-resolution; a bigger box is the main lever for clarity.
+Per-cell colours are chosen by a 1-step 2-means split (the two most distant pixels seed foreground/background), which keeps edges truer than a plain luminance threshold.
+
+`$KCLI_SPLASH_SIZE` (`"WxH"` in cells, default `40x20`) sets the box size — larger means more detail but more screen.
+
+`$KCLI_SPLASH_MODE=sextant` switches to 2×3 sextant glyphs (U+1FB00 "Legacy Computing"), ~50% more vertical detail than the default `quadrant`. Use it only if your terminal font renders those glyphs — otherwise they show as tofu boxes; quadrant is the universal default.
 
 ```bash
-KCLI_SPLASH=~/pics/logo.gif KCLI_SPLASH_SIZE=60x30 kcli
+KCLI_SPLASH=~/pics/logo.gif KCLI_SPLASH_SIZE=60x30 KCLI_SPLASH_MODE=sextant kcli
 ```
 
 ```yaml
