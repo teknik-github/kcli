@@ -57,7 +57,11 @@ func (a *App) stopGraph() {
 // runGraph is the sampling loop: it appends a fresh reading each tick and
 // redraws the sparklines until stop is closed.
 func (a *App) runGraph(view *tview.TextView, cl *k8s.Client, kind, ns, name string, stop <-chan struct{}) {
-	var cpuHist, memHist []float64
+	// Pre-fill the history with zeros so the chart is full width and visible
+	// from the first reading (a flat 0 baseline), rather than growing in as
+	// samples accrue. Real readings scroll the zeros off from the right.
+	cpuHist := make([]float64, graphSamples)
+	memHist := make([]float64, graphSamples)
 
 	sample := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
