@@ -33,7 +33,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Help overlay** (`?`): every key binding + the `:jump` aliases.
 - **Optional config file**: default namespace, refresh cadence, accent colour, and custom `:jump` aliases (`~/.config/kcli/config.yaml`).
 - **Multi-select** (`Space`): mark rows and bulk-delete them in one confirmation (Delete-capable views).
-- **Corner GIF animation**: play a `.gif` as colored half-blocks in the bottom-right corner of the main screen (`$KCLI_SPLASH`); toggle with `a`.
+- **Corner GIF animation**: play a `.gif` in the bottom-right corner of the main screen, rendered with 2×2 Unicode quadrant blocks (`$KCLI_SPLASH`); toggle with `a`.
 
 ---
 
@@ -101,7 +101,7 @@ kcli reads an optional YAML config from `$KCLI_CONFIG`, else `$XDG_CONFIG_HOME/k
 
 ### Corner GIF animation (optional)
 
-Set `$KCLI_SPLASH` to a `.gif` path and kcli plays it, looping, in the bottom-right corner of the main screen — rendered as colored half-blocks (`▀`, two sub-pixels per cell — truecolor terminal recommended) with antialiased (area-averaged) downscaling. It starts on launch and does not steal focus. Press `a` to toggle it off/on. Unset (or a bad path) simply shows nothing.
+Set `$KCLI_SPLASH` to a `.gif` path and kcli plays it, looping, in the bottom-right corner of the main screen. It is rendered with 2×2 Unicode **quadrant blocks** (four sub-pixels per cell, a best-fit glyph + fg/bg colour pair — like `chafa`) over antialiased (area-averaged) downscaling, which keeps it legible even in a small box. Truecolor terminal recommended. It starts on launch and does not steal focus. Press `a` to toggle it off/on. Unset (or a bad path) simply shows nothing.
 
 `$KCLI_SPLASH_SIZE` (`"WxH"` in cells, default `40x20`) sets the box size — larger means more detail but more screen. Half-blocks are inherently low-resolution; a bigger box is the main lever for clarity.
 
@@ -233,7 +233,7 @@ dynamic.go       jumpToView / jumpDynamic / setDynamicView (generic CRD view)
 help.go          the `?` help overlay
 edit.go          edit YAML in $EDITOR and apply
 graph.go         sampler + CPU/MEM sparkline rendering
-splash.go        optional corner GIF animation (half-block renderer + loop player)
+splash.go        optional corner GIF animation (quadrant-block renderer + loop player)
 exec.go          suspend TUI → exec → resume
 portforward.go   port-forward state + the built-in Port-Fwd view (pods & services)
 ```

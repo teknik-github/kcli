@@ -144,9 +144,10 @@ func scaleAvg(src *image.RGBA, w, h int) *image.RGBA {
 	return dst
 }
 
-// splashView renders one frame of a splashAnim as colored half-blocks: each
-// cell is '▀' with the top sub-pixel as foreground and the bottom as
-// background, doubling vertical resolution. It is decorative (never focused).
+// splashView renders one frame of a splashAnim with 2×2 Unicode quadrant blocks:
+// each cell approximates a 2×2 pixel block via a best-fit glyph plus a
+// foreground/background colour pair, so it packs four sub-pixels per cell (twice
+// the horizontal detail of half-blocks). It is decorative (never focused).
 type splashView struct {
 	*tview.Box
 	anim  *splashAnim
@@ -173,25 +174,83 @@ func (s *splashView) Draw(screen tcell.Screen) {
 	src := s.anim.frames[s.frame]
 	iw, ih := src.Bounds().Dx(), src.Bounds().Dy()
 
-	// Fit into w columns × (h*2) sub-pixel rows, preserving aspect, then
-	// area-average down to exactly that size for a clean, antialiased result.
-	sc := math.Min(float64(w)/float64(iw), float64(h*2)/float64(ih))
-	dw := max1(int(float64(iw) * sc))
-	dh := max1(int(float64(ih) * sc))
-	img := scaleAvg(src, dw, dh)
+	// Render with 2×2 quadrant blocks: two sub-pixels per cell in EACH axis (vs
+	// one column for half-blocks), doubling horizontal detail. Terminal cells
+	// are ~twice as tall as wide, so a square image wants twice as many
+	// horizontal sub-pixels as vertical — size the grid to match.
+	maxPW, maxPH := 2*w, 2*h
+	ph := maxPH
+	pw := ph * 2 * iw / ih
+	if pw > maxPW {
+		pw = maxPW
+		ph = pw * ih / (2 * iw)
+	}
+	pw &^= 1 // make even so it splits cleanly into 2-wide cells
+	ph &^= 1
+	if pw < 2 {
+		pw = 2
+	}
+	if ph < 2 {
+		ph = 2
+	}
+	img := scaleAvg(src, pw, ph)
 
-	cellRows := (dh + 1) / 2
-	offX := x + (w-dw)/2
-	offY := y + (h-cellRows)/2
-	for cy := 0; cy < cellRows; cy++ {
-		for cx := 0; cx < dw; cx++ {
-			style := tcell.StyleDefault.Foreground(rgb(img.RGBAAt(cx, 2*cy))).Background(tcell.ColorBlack)
-			if 2*cy+1 < dh {
-				style = style.Background(rgb(img.RGBAAt(cx, 2*cy+1)))
-			}
-			screen.SetContent(offX+cx, offY+cy, '▀', nil, style)
+	cw, ch := pw/2, ph/2
+	offX := x + (w-cw)/2
+	offY := y + (h-ch)/2
+	for cy := 0; cy < ch; cy++ {
+		for cx := 0; cx < cw; cx++ {
+			glyph, fg, bg := quadCell(
+				img.RGBAAt(2*cx, 2*cy), img.RGBAAt(2*cx+1, 2*cy),
+				img.RGBAAt(2*cx, 2*cy+1), img.RGBAAt(2*cx+1, 2*cy+1))
+			screen.SetContent(offX+cx, offY+cy, glyph, nil,
+				tcell.StyleDefault.Foreground(fg).Background(bg))
 		}
 	}
+}
+
+// quadrantGlyphs maps a 4-bit foreground mask (bit0 TL, bit1 TR, bit2 BL,
+// bit3 BR) to the 2×2 block-element glyph that fills those quadrants.
+var quadrantGlyphs = [16]rune{
+	' ', '▘', '▝', '▀', '▖', '▌', '▞', '▛',
+	'▗', '▚', '▐', '▜', '▄', '▙', '▟', '█',
+}
+
+// quadCell approximates a 2×2 pixel block with one glyph and two colors: it
+// splits the four pixels by luminance, averages each group into the foreground
+// (filled quadrants) and background colors, and picks the matching glyph.
+func quadCell(tl, tr, bl, br color.RGBA) (rune, tcell.Color, tcell.Color) {
+	px := [4]color.RGBA{tl, tr, bl, br}
+	var lum [4]int
+	sum := 0
+	for i, c := range px {
+		lum[i] = (299*int(c.R) + 587*int(c.G) + 114*int(c.B)) / 1000
+		sum += lum[i]
+	}
+	thr := sum / 4
+
+	mask := 0
+	var fR, fG, fB, fN, kR, kG, kB, kN int
+	for i, c := range px {
+		if lum[i] >= thr {
+			mask |= 1 << i
+			fR += int(c.R)
+			fG += int(c.G)
+			fB += int(c.B)
+			fN++
+		} else {
+			kR += int(c.R)
+			kG += int(c.G)
+			kB += int(c.B)
+			kN++
+		}
+	}
+	if kN == 0 { // all four pixels one colour → a solid block
+		return '█', rgb(px[0]), tcell.ColorBlack
+	}
+	fg := rgb(color.RGBA{uint8(fR / fN), uint8(fG / fN), uint8(fB / fN), 255})
+	bg := rgb(color.RGBA{uint8(kR / kN), uint8(kG / kN), uint8(kB / kN), 255})
+	return quadrantGlyphs[mask], fg, bg
 }
 
 func rgb(c color.RGBA) tcell.Color {
