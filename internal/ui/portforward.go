@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -29,6 +31,7 @@ func (a *App) showPortForwardDialog() {
 		return
 	}
 	ns, name := row.Namespace, row.Name
+	isService := a.view().ID == "service"
 
 	input := tview.NewInputField().
 		SetLabel("Ports (local:remote): ").
@@ -43,6 +46,24 @@ func (a *App) showPortForwardDialog() {
 			return
 		}
 		a.closeModal("pf-dialog")
+		if isService {
+			// A Service has no pod of its own; resolve it to a Ready backing pod
+			// and forward to that, transparently.
+			cl := a.client
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				pod, err := cl.ServiceForwardTarget(ctx, ns, name)
+				a.tv.QueueUpdateDraw(func() {
+					if err != nil {
+						a.showMessage("pf", fmt.Sprintf("error: %v", err))
+						return
+					}
+					a.startPortForward(ns, pod, ports)
+				})
+			}()
+			return
+		}
 		a.startPortForward(ns, name, ports)
 	})
 	form.AddButton("Cancel", func() { a.closeModal("pf-dialog") })
@@ -73,6 +94,7 @@ func (a *App) startPortForward(ns, name string, ports []string) {
 	a.forwards = append(a.forwards, pf)
 	a.drawHeader()
 
+	cl := a.client // pin the cluster this forward runs against, in case the context switches
 	readyCh := make(chan struct{})
 	go func() {
 		<-readyCh // closed by portforward once established
@@ -84,7 +106,7 @@ func (a *App) startPortForward(ns, name string, ports []string) {
 		})
 	}()
 	go func() {
-		err := a.client.PortForward(ns, name, ports, io.Discard, io.Discard, pf.stopCh, readyCh)
+		err := cl.PortForward(ns, name, ports, io.Discard, io.Discard, pf.stopCh, readyCh)
 		a.tv.QueueUpdateDraw(func() {
 			if pf.stopped {
 				return // torn down on purpose

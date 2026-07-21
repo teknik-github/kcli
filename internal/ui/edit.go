@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/teknik-github/kcli/internal/k8s"
 )
 
 // showEdit fetches the selected resource's YAML, opens it in $EDITOR (suspending
@@ -17,24 +19,26 @@ func (a *App) showEdit() {
 	if !ok {
 		return
 	}
+	cl := a.client // pin the cluster this edit targets, in case the context switches
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		original, err := a.client.GetYAML(ctx, kind, ns, name)
+		original, err := cl.GetYAML(ctx, kind, ns, name)
 		a.tv.QueueUpdateDraw(func() {
 			if err != nil {
 				a.showMessage("edit", fmt.Sprintf("error: %v", err))
 				return
 			}
-			a.editYAML(ns, name, original)
+			a.editYAML(cl, ns, name, original)
 		})
 	}()
 }
 
 // editYAML opens original in the user's editor, then applies the edited YAML if
-// it changed. Runs on the UI goroutine; Suspend hands the terminal to the
-// editor and restores the TUI when it exits.
-func (a *App) editYAML(ns, name, original string) {
+// it changed against cl (the same client the YAML was fetched from). Runs on the
+// UI goroutine; Suspend hands the terminal to the editor and restores the TUI
+// when it exits.
+func (a *App) editYAML(cl *k8s.Client, ns, name, original string) {
 	var edited string
 	var editErr error
 	a.tv.Suspend(func() {
@@ -53,7 +57,7 @@ func (a *App) editYAML(ns, name, original string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		err := a.client.ApplyYAML(ctx, []byte(edited))
+		err := cl.ApplyYAML(ctx, []byte(edited))
 		a.tv.QueueUpdateDraw(func() {
 			if err != nil {
 				a.showMessage("edit", fmt.Sprintf("apply failed: %v", err))

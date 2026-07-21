@@ -5,11 +5,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/teknik-github/kcli/internal/k8s"
 )
@@ -36,12 +38,25 @@ type App struct {
 	sortDesc    bool   // descending when true
 	clientGen   int    // bumped on context switch; drops stale in-flight refreshes
 
+	// refreshEvery is the active view's auto-refresh cadence in nanoseconds. It
+	// is the one field the autoRefresh ticker goroutine reads, so it is atomic;
+	// switchView (UI goroutine) publishes it. Everything else the loop needs is
+	// read on the UI goroutine inside loadCurrentView.
+	refreshEvery atomic.Int64
+
 	graphStop  chan struct{}      // stops the live graph sampler when non-nil
 	logsCancel context.CancelFunc // cancels the active log stream when non-nil
 
 	rows      []Row          // current view's data, in fetch order
 	forwards  []*portForward // active background port-forwards
 	nextFwdID int
+
+	// Dynamic (generic/CRD) view state. dynIdx is the reserved Hidden slot in
+	// resourceViews whose fields get rewritten on each :jump to an unregistered
+	// resource; the rest describe what that slot currently points at.
+	dynIdx        int
+	dynGVR        schema.GroupVersionResource
+	dynNamespaced bool
 }
 
 // NewApp wires up the widget tree and key bindings.
@@ -53,6 +68,8 @@ func NewApp(client *k8s.Client) *App {
 		namespace: "", // start across all namespaces
 		sortCol:   -1, // fetch order until the user sorts
 	}
+	a.dynIdx = len(resourceViews) - 1 // the reserved Dynamic slot is appended last
+	a.refreshEvery.Store(int64(refreshInterval))
 
 	a.logo = tview.NewTextView().SetDynamicColors(true).SetWrap(false).
 		SetTextAlign(tview.AlignRight) // pin the banner to the top-right corner, k9s-style
@@ -112,9 +129,9 @@ func (a *App) autoRefresh() {
 	var elapsed time.Duration
 	for range ticker.C {
 		elapsed += refreshInterval
-		want := refreshInterval
-		if iv := resourceViews[a.viewIdx].RefreshInterval; iv > want {
-			want = iv
+		want := time.Duration(a.refreshEvery.Load())
+		if want < refreshInterval {
+			want = refreshInterval
 		}
 		if elapsed >= want {
 			elapsed = 0
@@ -123,14 +140,23 @@ func (a *App) autoRefresh() {
 	}
 }
 
-// refresh reloads the current view's resource for the active namespace and
-// redraws. It is safe to call from any goroutine.
+// refresh reloads the current view and redraws. It is safe to call from any
+// goroutine EXCEPT the UI goroutine itself (QueueUpdate would deadlock); all
+// callers spawn it (go a.refresh()) or run on a background goroutine.
+//
+// The shared UI state the reload depends on — view index, client, namespace — is
+// read inside loadCurrentView on the UI goroutine, not here, so a concurrent
+// context switch (which reassigns a.client on the UI goroutine) cannot race with
+// it.
 func (a *App) refresh() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	a.tv.QueueUpdate(a.loadCurrentView)
+}
 
-	// Capture the view and client generation at load time so a mid-flight view
-	// switch or context switch does not store results into the wrong place.
+// loadCurrentView captures the active view, client, and namespace on the UI
+// goroutine, then fans the cluster fetch out to a background goroutine and
+// stores the result back on the UI goroutine. Must run on the UI goroutine (it
+// is only ever invoked via QueueUpdate).
+func (a *App) loadCurrentView() {
 	idx := a.viewIdx
 	gen := a.clientGen
 	cl := a.client
@@ -138,15 +164,10 @@ func (a *App) refresh() {
 
 	// Local views (port-forwards) are backed by App state, not the cluster.
 	if view.Local {
-		a.tv.QueueUpdateDraw(func() {
-			if a.viewIdx != idx {
-				return
-			}
-			a.rows = a.forwardRows()
-			a.drawHeader()
-			a.drawTabs()
-			a.drawTable()
-		})
+		a.rows = a.forwardRows()
+		a.drawHeader()
+		a.drawTabs()
+		a.drawTable()
 		return
 	}
 
@@ -154,21 +175,26 @@ func (a *App) refresh() {
 	if view.ClusterScoped {
 		ns = ""
 	}
-	rows, err := view.Fetch(ctx, cl, ns)
+	fetch := view.Fetch // capture: the Dynamic slot's Fetch may be reassigned on a later :jump
 
-	a.tv.QueueUpdateDraw(func() {
-		if a.viewIdx != idx || a.clientGen != gen {
-			return // view or context switched while this load was in flight
-		}
-		if err != nil {
-			a.setHeaderError(err)
-			return
-		}
-		a.rows = rows
-		a.drawHeader()
-		a.drawTabs()
-		a.drawTable()
-	})
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		rows, err := fetch(ctx, cl, ns)
+		a.tv.QueueUpdateDraw(func() {
+			if a.viewIdx != idx || a.clientGen != gen {
+				return // view or context switched while this load was in flight
+			}
+			if err != nil {
+				a.setHeaderError(err)
+				return
+			}
+			a.rows = rows
+			a.drawHeader()
+			a.drawTabs()
+			a.drawTable()
+		})
+	}()
 }
 
 // switchView activates the view at index i and triggers an immediate load.
@@ -180,10 +206,21 @@ func (a *App) switchView(i int) {
 	a.rows = nil
 	a.sortCol = -1 // sort is per-view; reset on switch
 	a.sortDesc = false
+	a.publishCadence()
 	a.table.Clear()
 	a.drawTabs()
 	a.drawHeader()
 	go a.refresh()
+}
+
+// publishCadence stores the active view's auto-refresh interval for the ticker
+// goroutine to read. Called on the UI goroutine whenever the view changes.
+func (a *App) publishCadence() {
+	want := refreshInterval
+	if iv := resourceViews[a.viewIdx].RefreshInterval; iv > want {
+		want = iv
+	}
+	a.refreshEvery.Store(int64(want))
 }
 
 // cycleView moves to the next/previous non-hidden view, wrapping around.
@@ -193,7 +230,7 @@ func (a *App) cycleView(delta int) {
 	i := a.viewIdx
 	for k := 0; k < n; k++ {
 		i = (i + delta + n) % n
-		if !resourceViews[i].Local {
+		if !resourceViews[i].Local && !resourceViews[i].Hidden {
 			a.switchView(i)
 			return
 		}
@@ -239,10 +276,16 @@ func hdrLine(label, value string) string {
 func (a *App) drawTabs() {
 	line := ""
 	for i, v := range resourceViews {
-		if v.Local {
+		if v.Local || v.Hidden {
 			continue
 		}
-		label := fmt.Sprintf(" %d:%s ", i+1, v.Title)
+		// Only views 0..8 have a working number key (1..9); past that the label
+		// drops the number so it does not imply a shortcut that isn't there —
+		// reach those via ":" command-jump or Tab.
+		label := fmt.Sprintf(" %s ", v.Title)
+		if i < 9 {
+			label = fmt.Sprintf(" %d:%s ", i+1, v.Title)
+		}
 		if i == a.viewIdx {
 			line += "[black:aqua:b]" + label + "[-:-:-]"
 		} else {
@@ -250,8 +293,11 @@ func (a *App) drawTabs() {
 		}
 		line += " "
 	}
-	if a.view().Local { // e.g. Port-Fwd: show it separately with a back hint
+	switch {
+	case a.view().Local: // e.g. Port-Fwd: show it separately with a back hint
 		line += fmt.Sprintf("  [black:aqua:b] %s [-:-:-]  [gray]q back[-]", a.view().Title)
+	case a.view().Hidden: // e.g. a Dynamic/CRD view reached via :jump
+		line += fmt.Sprintf("  [black:aqua:b] %s [-:-:-]  [gray]:jump / tab to leave[-]", a.view().Title)
 	}
 	a.tabs.SetText(line)
 }
@@ -260,9 +306,9 @@ func (a *App) setHeaderError(err error) {
 	a.header.SetText(fmt.Sprintf("[red]error: %v[-]", err))
 }
 
-const footerHelp = "[::b]q[-] quit  [::b]tab[-] view  [::b]enter[-] detail  [::b]/[-] filter  [::b].[-] sort  " +
+const footerHelp = "[::b]q[-] quit  [::b]?[-] help  [::b]tab[-] view  [::b]:[-] jump  [::b]enter[-] detail  [::b]/[-] filter  [::b].[-] sort  " +
 	"[::b]g[-] graph  [::b]f[-] fwd  [::b]F[-] fwd-view  [::b]l[-] logs  [::b]e[-] exec  [::b]E[-] edit  [::b]s[-] scale  " +
-	"[::b]R[-] restart  [::b]c[-] cordon  [::b]D[-] drain  [::b]d[-] del  [::b]n[-] ns  [::b]x[-] ctx"
+	"[::b]R[-] restart  [::b]u[-] undo  [::b]v[-] reveal  [::b]c[-] cordon  [::b]D[-] drain  [::b]d[-] del  [::b]n[-] ns  [::b]x[-] ctx"
 
 // logoLines is the KCLI wordmark in figlet's "ANSI Shadow" style: the solid
 // blocks are the letter faces, the box-drawing glyphs their drop shadow. All

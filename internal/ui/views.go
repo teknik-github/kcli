@@ -9,6 +9,31 @@ import (
 // view returns the active view definition.
 func (a *App) view() *viewDef { return resourceViews[a.viewIdx] }
 
+// resolveView maps a command-jump query (a resource name or alias,
+// case-insensitive) to a view index. It matches the view's ID, its
+// "s"-pluralised ID, the lowercased Title, and any explicit Aliases — so ":svc",
+// ":services", and ":Services" all reach the same view.
+func resolveView(query string) (int, bool) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return -1, false
+	}
+	for i, v := range resourceViews {
+		if v.Hidden { // the Dynamic placeholder is not a jump target by name
+			continue
+		}
+		if q == v.ID || q == v.ID+"s" || q == strings.ToLower(v.Title) {
+			return i, true
+		}
+		for _, al := range v.Aliases {
+			if q == al {
+				return i, true
+			}
+		}
+	}
+	return -1, false
+}
+
 // match reports whether any of a row's visible cells (or its namespace/name
 // keys) contain the active filter (case-insensitive). An empty filter matches
 // everything. Searching every cell lets you filter by any column — e.g. Events

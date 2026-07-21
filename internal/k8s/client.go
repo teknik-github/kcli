@@ -20,11 +20,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
@@ -39,6 +37,9 @@ type Client struct {
 	restCfg    *rest.Config        // kept for streaming subresources (exec)
 	Context    string              // current kubeconfig context name
 	kubeconfig string              // resolved kubeconfig path, for switching context
+
+	mapper    meta.RESTMapper   // lazily built discovery REST mapper (dynamic/apply)
+	dynClient dynamic.Interface // lazily built dynamic client (generic/CRD views)
 }
 
 // NewClient builds a Client from a kubeconfig path. An empty path falls back to
@@ -256,6 +257,59 @@ func (c *Client) Secrets(ctx context.Context, namespace string) ([]Secret, error
 		func(i int) (string, string) { return out[i].Namespace, out[i].Name },
 		func(i, j int) { out[i], out[j] = out[j], out[i] })
 	return out, nil
+}
+
+// SecretData returns a secret's decoded values (client-go base64-decodes the
+// Data map into raw bytes; we surface them as strings). Used by the explicit
+// "reveal" action — normal display never carries values.
+func (c *Client) SecretData(ctx context.Context, namespace, name string) (map[string]string, error) {
+	s, err := c.clientset.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(s.Data))
+	for k, v := range s.Data {
+		out[k] = string(v)
+	}
+	return out, nil
+}
+
+// ServiceForwardTarget resolves a service to a Ready backing pod, so a
+// port-forward against a Service can transparently target one of its endpoints.
+// It errors on selector-less services (headless/ExternalName) which have no pods
+// to forward to.
+func (c *Client) ServiceForwardTarget(ctx context.Context, namespace, name string) (string, error) {
+	svc, err := c.clientset.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	if len(svc.Spec.Selector) == 0 {
+		return "", fmt.Errorf("service %s has no selector (headless or ExternalName)", name)
+	}
+	sel := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: svc.Spec.Selector})
+	pods, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: sel})
+	if err != nil {
+		return "", err
+	}
+	var firstRunning string
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		if firstRunning == "" {
+			firstRunning = p.Name
+		}
+		for _, cond := range p.Status.Conditions {
+			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+				return p.Name, nil // prefer a Ready pod
+			}
+		}
+	}
+	if firstRunning != "" {
+		return firstRunning, nil // no Ready pod, but a Running one will do
+	}
+	return "", fmt.Errorf("no running pod behind service %s", name)
 }
 
 // Ingress is a display-oriented snapshot of an ingress.
@@ -955,20 +1009,16 @@ func (c *Client) ApplyYAML(ctx context.Context, data []byte) error {
 		return fmt.Errorf("YAML is missing apiVersion/kind or metadata.name")
 	}
 
-	disco, err := discovery.NewDiscoveryClientForConfig(c.restCfg)
+	m, err := c.restMapper()
 	if err != nil {
 		return err
 	}
-	groups, err := restmapper.GetAPIGroupResources(disco)
-	if err != nil {
-		return err
-	}
-	mapping, err := restmapper.NewDiscoveryRESTMapper(groups).RESTMapping(gvk.GroupKind(), gvk.Version)
+	mapping, err := m.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
 		return fmt.Errorf("map %s: %w", gvk, err)
 	}
 
-	dyn, err := dynamic.NewForConfig(c.restCfg)
+	dyn, err := c.dynamicClient()
 	if err != nil {
 		return err
 	}

@@ -90,6 +90,12 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 	case 'x':
 		a.showContextPicker()
 		return nil
+	case '?':
+		a.showHelp()
+		return nil
+	case ':':
+		a.showCommandDialog() // command-jump to any resource by name/alias
+		return nil
 	case '/':
 		a.showFilterDialog()
 		return nil
@@ -142,6 +148,16 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 	case 'R':
 		if caps.Restart {
 			a.confirmRestart()
+		}
+		return nil
+	case 'u':
+		if caps.Rollback {
+			a.confirmRollback()
+		}
+		return nil
+	case 'v':
+		if caps.Reveal {
+			a.showSecretReveal()
 		}
 		return nil
 	case 'c':

@@ -8,6 +8,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/guptarohit/asciigraph"
 	"github.com/rivo/tview"
+
+	"github.com/teknik-github/kcli/internal/k8s"
 )
 
 const (
@@ -40,7 +42,8 @@ func (a *App) showGraph() {
 
 	stop := make(chan struct{})
 	a.graphStop = stop
-	go a.runGraph(view, kind, ns, name, stop)
+	cl := a.client // pin the cluster this sampler reads, in case the context switches
+	go a.runGraph(view, cl, kind, ns, name, stop)
 }
 
 // stopGraph halts the running graph sampler, if any.
@@ -53,7 +56,7 @@ func (a *App) stopGraph() {
 
 // runGraph is the sampling loop: it appends a fresh reading each tick and
 // redraws the sparklines until stop is closed.
-func (a *App) runGraph(view *tview.TextView, kind, ns, name string, stop <-chan struct{}) {
+func (a *App) runGraph(view *tview.TextView, cl *k8s.Client, kind, ns, name string, stop <-chan struct{}) {
 	var cpuHist, memHist []float64
 
 	sample := func() {
@@ -64,7 +67,7 @@ func (a *App) runGraph(view *tview.TextView, kind, ns, name string, stop <-chan 
 		var cpuLabel, memLabel string
 
 		if kind == "pod" {
-			cpuMilli, memBytes, err := a.client.PodUsage(ctx, ns, name)
+			cpuMilli, memBytes, err := cl.PodUsage(ctx, ns, name)
 			if err != nil {
 				a.tv.QueueUpdateDraw(func() { view.SetText(fmt.Sprintf("[red]metrics error: %v[-]", err)) })
 				return
@@ -72,7 +75,7 @@ func (a *App) runGraph(view *tview.TextView, kind, ns, name string, stop <-chan 
 			cpuVal, memVal = float64(cpuMilli), float64(memBytes)/(1024*1024)
 			cpuLabel, memLabel = fmt.Sprintf("%dm", cpuMilli), fmt.Sprintf("%dMi", int64(memVal))
 		} else {
-			cpuMilli, memBytes, cpuCap, memCap, err := a.client.NodeUsage(ctx, name)
+			cpuMilli, memBytes, cpuCap, memCap, err := cl.NodeUsage(ctx, name)
 			if err != nil {
 				a.tv.QueueUpdateDraw(func() { view.SetText(fmt.Sprintf("[red]metrics error: %v[-]", err)) })
 				return

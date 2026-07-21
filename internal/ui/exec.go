@@ -22,13 +22,14 @@ func (a *App) execShell() {
 // execInto suspends the TUI, attaches a shell to the given container, then
 // resumes the TUI when the shell exits.
 func (a *App) execInto(namespace, name, container string) {
+	cl := a.client // pin the cluster this exec targets, in case the context switches
 	// Suspend hands the terminal back to the OS while f runs, then restores the
 	// tview screen afterwards — exactly what an interactive exec needs.
 	a.tv.Suspend(func() {
 		fmt.Printf("\n\033[1mkcli:\033[0m connecting to %s/%s [%s] (exit shell to return)\n\n",
 			namespace, name, container)
 
-		if err := a.client.ExecShell(context.Background(), namespace, name, container); err != nil {
+		if err := cl.ExecShell(context.Background(), namespace, name, container); err != nil {
 			fmt.Printf("\n\033[31mexec failed: %v\033[0m\n", err)
 			fmt.Print("press Enter to return to kcli...")
 			bufio.NewReader(os.Stdin).ReadString('\n')

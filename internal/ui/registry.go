@@ -26,20 +26,25 @@ type viewCaps struct {
 	Delete      bool
 	PortForward bool
 	Restart     bool // rollout restart (workloads with a pod template)
+	Rollback    bool // rollout undo to the previous revision (workloads)
 	Cordon      bool // toggle node schedulability
 	Drain       bool // cordon + evict pods (nodes)
 	Edit        bool // edit YAML in $EDITOR and apply
+	Reveal      bool // decode + show values (secrets)
 }
 
 // viewDef describes one resource view. Adding a resource means appending one
 // viewDef to resourceViews — no other switch statements to touch.
 type viewDef struct {
-	ID              string // singular kind, used by Describe/Delete ("pod", ...)
+	ID              string   // singular kind, used by Describe/Delete ("pod", ...)
+	Aliases         []string // extra command-jump keywords (":po", ":svc", ...)
 	Title           string
 	Columns         []string
 	StatusCol       int           // column index to color as a status, -1 for none
 	ClusterScoped   bool          // no namespace (nodes)
 	Local           bool          // rows come from App state, not the cluster (Fetch unused)
+	Hidden          bool          // omitted from the tab bar and Tab cycling (reach via :jump)
+	Dynamic         bool          // generic view backed by the dynamic client (CRDs, any GVR)
 	RefreshInterval time.Duration // per-view auto-refresh cadence; 0 = default (refreshInterval)
 	Caps            viewCaps
 	Fetch           func(ctx context.Context, c *k8s.Client, namespace string) ([]Row, error)
@@ -50,6 +55,7 @@ type viewDef struct {
 var resourceViews = []*viewDef{
 	{
 		ID:        "pod",
+		Aliases:   []string{"po"},
 		Title:     "Pods",
 		Columns:   []string{"NAMESPACE", "NAME", "READY", "STATUS", "RESTARTS", "CPU", "MEM", "AGE", "NODE"},
 		StatusCol: 3,
@@ -70,10 +76,11 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:        "deployment",
+		Aliases:   []string{"deploy", "dep"},
 		Title:     "Deployments",
 		Columns:   []string{"NAMESPACE", "NAME", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Scale: true, Delete: true, Restart: true, Edit: true},
+		Caps:      viewCaps{Scale: true, Delete: true, Restart: true, Rollback: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			deps, err := c.Deployments(ctx, ns)
 			if err != nil {
@@ -89,10 +96,11 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:        "daemonset",
+		Aliases:   []string{"ds"},
 		Title:     "DaemonSets",
 		Columns:   []string{"NAMESPACE", "NAME", "DESIRED", "CURRENT", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Restart: true, Delete: true, Edit: true},
+		Caps:      viewCaps{Restart: true, Rollback: true, Delete: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			sets, err := c.DaemonSets(ctx, ns)
 			if err != nil {
@@ -109,10 +117,11 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:        "service",
+		Aliases:   []string{"svc"},
 		Title:     "Services",
 		Columns:   []string{"NAMESPACE", "NAME", "TYPE", "CLUSTER-IP", "EXTERNAL-IP", "PORTS", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Delete: true, Edit: true},
+		Caps:      viewCaps{Delete: true, Edit: true, PortForward: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			svcs, err := c.Services(ctx, ns)
 			if err != nil {
@@ -128,6 +137,7 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:            "node",
+		Aliases:       []string{"no"},
 		Title:         "Nodes",
 		Columns:       []string{"NAME", "STATUS", "ROLES", "CPU", "MEM", "VERSION", "AGE"},
 		StatusCol:     1,
@@ -149,10 +159,11 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:        "statefulset",
+		Aliases:   []string{"sts"},
 		Title:     "StatefulSets",
 		Columns:   []string{"NAMESPACE", "NAME", "READY", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Scale: true, Delete: true, Restart: true, Edit: true},
+		Caps:      viewCaps{Scale: true, Delete: true, Restart: true, Rollback: true, Edit: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			sets, err := c.StatefulSets(ctx, ns)
 			if err != nil {
@@ -167,6 +178,7 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:        "replicaset",
+		Aliases:   []string{"rs"},
 		Title:     "ReplicaSets",
 		Columns:   []string{"NAMESPACE", "NAME", "DESIRED", "CURRENT", "READY", "AGE"},
 		StatusCol: -1,
@@ -186,6 +198,7 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:        "pvc",
+		Aliases:   []string{"persistentvolumeclaim", "pvcs"},
 		Title:     "PVCs",
 		Columns:   []string{"NAMESPACE", "NAME", "STATUS", "VOLUME", "CAPACITY", "ACCESS", "STORAGECLASS", "AGE"},
 		StatusCol: 2,
@@ -205,6 +218,7 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:        "ingress",
+		Aliases:   []string{"ing"},
 		Title:     "Ingresses",
 		Columns:   []string{"NAMESPACE", "NAME", "CLASS", "HOSTS", "ADDRESS", "PORTS", "AGE"},
 		StatusCol: -1,
@@ -243,6 +257,7 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:        "cronjob",
+		Aliases:   []string{"cj"},
 		Title:     "CronJobs",
 		Columns:   []string{"NAMESPACE", "NAME", "SCHEDULE", "SUSPEND", "ACTIVE", "LAST-SCHEDULE", "AGE"},
 		StatusCol: -1,
@@ -262,6 +277,7 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:        "configmap",
+		Aliases:   []string{"cm"},
 		Title:     "ConfigMaps",
 		Columns:   []string{"NAMESPACE", "NAME", "DATA", "AGE"},
 		StatusCol: -1,
@@ -281,10 +297,11 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:        "secret",
+		Aliases:   []string{"sec"},
 		Title:     "Secrets",
 		Columns:   []string{"NAMESPACE", "NAME", "TYPE", "DATA", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Delete: true, Edit: true},
+		Caps:      viewCaps{Delete: true, Edit: true, Reveal: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			secs, err := c.Secrets(ctx, ns)
 			if err != nil {
@@ -300,6 +317,7 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:              "event",
+		Aliases:         []string{"ev"},
 		Title:           "Events",
 		Columns:         []string{"NAMESPACE", "LAST-SEEN", "TYPE", "REASON", "OBJECT", "COUNT", "MESSAGE"},
 		StatusCol:       2,                // TYPE: Normal (green) / Warning (red)
@@ -320,9 +338,21 @@ var resourceViews = []*viewDef{
 	},
 	{
 		ID:        "portforward",
+		Aliases:   []string{"pf", "fwd", "port-forward"},
 		Title:     "Port-Fwd",
 		Columns:   []string{"ID", "NAMESPACE", "POD", "PORTS", "STATUS"},
 		StatusCol: 4,
 		Local:     true, // rows built from App.forwards, not the cluster
+	},
+	{
+		// Generic view for CRDs / any GVR the registry has no explicit entry for.
+		// Title, Columns, and Fetch are filled in at :jump time (setDynamicView);
+		// Hidden keeps it out of the tab bar and Tab cycling.
+		ID:        "dynamic",
+		Title:     "Dynamic",
+		Columns:   []string{"NAMESPACE", "NAME", "AGE"},
+		StatusCol: -1,
+		Hidden:    true,
+		Dynamic:   true,
 	},
 }
