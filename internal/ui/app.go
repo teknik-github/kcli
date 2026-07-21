@@ -50,6 +50,8 @@ type App struct {
 	forwards  []*portForward // active background port-forwards
 	nextFwdID int
 
+	marked map[string]bool // rowKey set for multi-select bulk actions; per-view
+
 	// Dynamic (generic/CRD) view state. dynIdx is the reserved Hidden slot in
 	// resourceViews whose fields get rewritten on each :jump to an unregistered
 	// resource; the rest describe what that slot currently points at.
@@ -217,6 +219,7 @@ func (a *App) switchView(i int) {
 	a.rows = nil
 	a.sortCol = -1 // sort is per-view; reset on switch
 	a.sortDesc = false
+	a.clearMarks() // marks are per-view identities
 	a.publishCadence()
 	a.table.Clear()
 	a.drawTabs()
@@ -269,6 +272,9 @@ func (a *App) drawHeader() {
 	}
 	if s := a.sortLabel(); s != "" {
 		lines = append(lines, a.hdrLine("Sort", s))
+	}
+	if n := len(a.marked); n > 0 {
+		lines = append(lines, a.hdrLine("Marked", itoa(n)))
 	}
 	if n := len(a.forwards); n > 0 {
 		lines = append(lines, a.hdrLine("Forwards", fmt.Sprintf("⇄ %d", n)))
@@ -328,7 +334,7 @@ func (a *App) setHeaderError(err error) {
 
 const footerHelp = "[::b]q[-] quit  [::b]?[-] help  [::b]tab[-] view  [::b]:[-] jump  [::b]enter[-] detail  [::b]/[-] filter  [::b].[-] sort  " +
 	"[::b]g[-] graph  [::b]f[-] fwd  [::b]F[-] fwd-view  [::b]l[-] logs  [::b]e[-] exec  [::b]E[-] edit  [::b]s[-] scale  " +
-	"[::b]R[-] restart  [::b]u[-] undo  [::b]v[-] reveal  [::b]c[-] cordon  [::b]D[-] drain  [::b]d[-] del  [::b]n[-] ns  [::b]x[-] ctx"
+	"[::b]R[-] restart  [::b]u[-] undo  [::b]v[-] reveal  [::b]c[-] cordon  [::b]D[-] drain  [::b]space[-] mark  [::b]d[-] del  [::b]n[-] ns  [::b]x[-] ctx"
 
 // logoLines is the KCLI wordmark in figlet's "ANSI Shadow" style: the solid
 // blocks are the letter faces, the box-drawing glyphs their drop shadow. All

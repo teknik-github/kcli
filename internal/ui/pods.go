@@ -21,12 +21,16 @@ func (a *App) drawTable() {
 
 	rows := a.filteredRows()
 	for r, row := range rows {
+		marked := a.marked[rowKey(row)]
 		for c, val := range row.Cells {
 			// Escape so message text containing "[...]" is not parsed as a
 			// tview colour tag; status colouring uses SetTextColor, not tags.
 			cell := tview.NewTableCell(tview.Escape(val))
 			if c == view.StatusCol {
 				cell.SetTextColor(statusColor(val))
+			}
+			if marked {
+				cell.SetBackgroundColor(markColor) // multi-select highlight
 			}
 			a.table.SetCell(r+1, c, cell)
 		}
@@ -80,6 +84,9 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 		} else {
 			a.tv.Stop()
 		}
+		return nil
+	case ' ':
+		a.toggleMark() // multi-select: mark/unmark the current row (Delete-capable views)
 		return nil
 	case 'r':
 		go a.refresh()

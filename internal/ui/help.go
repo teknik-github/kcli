@@ -45,7 +45,8 @@ func (a *App) showHelp() {
 		{"v", "reveal secret values (decoded)"},
 		{"c", "cordon / uncordon node"},
 		{"D", "drain node"},
-		{"d", "delete"},
+		{"space", "mark/unmark row (multi-select, Delete-capable views)"},
+		{"d", "delete (marked rows if any, else the current row)"},
 	})
 
 	b.WriteString("\n[aqua::b]:jump aliases[-::-]\n")

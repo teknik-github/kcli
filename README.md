@@ -31,6 +31,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Context switching** (`x`): switch cluster/context at runtime, no restart.
 - **Help overlay** (`?`): every key binding + the `:jump` aliases.
 - **Optional config file**: default namespace, refresh cadence, accent colour, and custom `:jump` aliases (`~/.config/kcli/config.yaml`).
+- **Multi-select** (`Space`): mark rows and bulk-delete them in one confirmation (Delete-capable views).
 
 ---
 
@@ -149,7 +150,8 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `D`                 | Drain a node (cordon + evict pods)                             |
 | `f`                 | Start a port-forward (pod or service)                          |
 | `F`                 | Open the Port-Forward view                                      |
-| `d`                 | Delete the resource (with confirmation)                        |
+| `Space`             | Mark / unmark the current row (multi-select)                   |
+| `d`                 | Delete — the marked rows if any, else the current row          |
 | `q`                 | Quit (in a hidden view — Port-Fwd/Dynamic — return instead)    |
 
 > Actions are *data-driven*: a key only applies in views that support it (see the table below). Pressing `s` in Pods, for example, does nothing.
@@ -183,6 +185,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 - **Reveal secret** (`v`): after a confirmation, decodes and shows the secret's values in plain text — deliberately separate from `describe`, which always masks.
 - **Port-forward** works on Pods and Services (a Service resolves to a Ready backing pod first). It runs in the background and stays alive after the dialog closes; the header shows `⇄ N`. Manage/stop forwards from the Port-Fwd view (`F`).
 - **Events** are sorted newest-first and poll more slowly than other views; TYPE `Normal` is green, `Warning` is red.
+- **Multi-select** (`Space`): marks the current row (highlighted background) in any Delete-capable view; `d` then deletes every marked row after one confirmation showing the count. Marks are keyed by namespace/name so they survive filter and sort, and clear on any view/namespace/context switch.
 - **Context switch** (`x`): rebuilds the client for the chosen kubeconfig context and reloads; the namespace, filter, and sort reset since they are cluster-specific. In-flight actions and background port-forwards keep running against the cluster they were started on.
 
 ---

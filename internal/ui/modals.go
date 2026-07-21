@@ -48,6 +48,7 @@ func (a *App) showNamespacePicker() {
 
 func (a *App) setNamespace(ns string) {
 	a.namespace = ns
+	a.clearMarks() // row identities change with the namespace
 	a.closeModal("namespace")
 	go a.refresh()
 }
@@ -107,6 +108,7 @@ func (a *App) switchContext(name string) {
 	a.filter = ""
 	a.sortCol = -1
 	a.sortDesc = false
+	a.clearMarks()
 	a.closeModal("context")
 	a.table.Clear()
 	a.drawHeader()
@@ -479,6 +481,10 @@ func (a *App) showScaleDialog() {
 // confirmDelete asks before deleting the resource under the cursor. Only views
 // whose Caps.Delete is set reach here.
 func (a *App) confirmDelete() {
+	if len(a.marked) > 0 {
+		a.confirmBulkDelete() // multi-select: delete every marked row instead
+		return
+	}
 	kind, ns, name, ok := a.selectedName()
 	if !ok {
 		return
