@@ -53,13 +53,13 @@ func (a *App) showPortForwardDialog() {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				pod, err := cl.ServiceForwardTarget(ctx, ns, name)
+				pod, mapped, err := cl.ServiceForward(ctx, ns, name, ports)
 				a.tv.QueueUpdateDraw(func() {
 					if err != nil {
 						a.showMessage("pf", fmt.Sprintf("error: %v", err))
 						return
 					}
-					a.startPortForward(ns, pod, ports)
+					a.startPortForward(ns, pod, mapped)
 				})
 			}()
 			return

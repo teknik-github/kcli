@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -309,42 +311,94 @@ func (c *Client) SecretData(ctx context.Context, namespace, name string) (map[st
 	return out, nil
 }
 
-// ServiceForwardTarget resolves a service to a Ready backing pod, so a
-// port-forward against a Service can transparently target one of its endpoints.
-// It errors on selector-less services (headless/ExternalName) which have no pods
-// to forward to.
-func (c *Client) ServiceForwardTarget(ctx context.Context, namespace, name string) (string, error) {
+// ServiceForward resolves a Service to a Ready backing pod and rewrites the
+// requested local:servicePort mappings to local:podPort (following targetPort,
+// including named ports), so a port-forward against a Service transparently
+// reaches the pod's real container port — like `kubectl port-forward service/…`.
+// It errors on selector-less services (headless/ExternalName), which have no
+// pods to forward to.
+func (c *Client) ServiceForward(ctx context.Context, namespace, name string, ports []string) (string, []string, error) {
 	svc, err := c.clientset.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if len(svc.Spec.Selector) == 0 {
-		return "", fmt.Errorf("service %s has no selector (headless or ExternalName)", name)
+		return "", nil, fmt.Errorf("service %s has no selector (headless or ExternalName)", name)
 	}
 	sel := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: svc.Spec.Selector})
 	pods, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: sel})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	var firstRunning string
+
+	var target, firstRunning *corev1.Pod
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		if p.Status.Phase != corev1.PodRunning {
 			continue
 		}
-		if firstRunning == "" {
-			firstRunning = p.Name
+		if firstRunning == nil {
+			firstRunning = p
 		}
 		for _, cond := range p.Status.Conditions {
 			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
-				return p.Name, nil // prefer a Ready pod
+				target = p // prefer a Ready pod
+				break
+			}
+		}
+		if target != nil {
+			break
+		}
+	}
+	if target == nil {
+		target = firstRunning // no Ready pod, but a Running one will do
+	}
+	if target == nil {
+		return "", nil, fmt.Errorf("no running pod behind service %s", name)
+	}
+
+	// A Service port often differs from the pod's container port (via targetPort,
+	// which may be a named port). Translate each requested local:servicePort to
+	// local:podPort so forwarding to a Service behaves like kubectl.
+	svcToPod := make(map[int]int, len(svc.Spec.Ports))
+	for _, sp := range svc.Spec.Ports {
+		svcToPod[int(sp.Port)] = targetPodPort(sp, target)
+	}
+	mapped := make([]string, len(ports))
+	for i, pm := range ports {
+		local, remote, found := strings.Cut(pm, ":")
+		rp, err := strconv.Atoi(remote)
+		if !found || err != nil {
+			mapped[i] = pm
+			continue
+		}
+		if pp, ok := svcToPod[rp]; ok && pp != rp {
+			mapped[i] = local + ":" + strconv.Itoa(pp)
+		} else {
+			mapped[i] = pm
+		}
+	}
+	return target.Name, mapped, nil
+}
+
+// targetPodPort resolves a Service port's targetPort (numeric, named, or unset)
+// to the backing pod's container port number.
+func targetPodPort(sp corev1.ServicePort, pod *corev1.Pod) int {
+	tp := sp.TargetPort
+	if tp.Type == intstr.Int {
+		if tp.IntVal != 0 {
+			return int(tp.IntVal)
+		}
+		return int(sp.Port) // unset targetPort defaults to the service port
+	}
+	for _, ct := range pod.Spec.Containers {
+		for _, cp := range ct.Ports {
+			if cp.Name == tp.StrVal {
+				return int(cp.ContainerPort)
 			}
 		}
 	}
-	if firstRunning != "" {
-		return firstRunning, nil // no Ready pod, but a Running one will do
-	}
-	return "", fmt.Errorf("no running pod behind service %s", name)
+	return int(sp.Port) // named but not found on the pod; fall back
 }
 
 // Ingress is a display-oriented snapshot of an ingress.
