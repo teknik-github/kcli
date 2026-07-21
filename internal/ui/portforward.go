@@ -11,6 +11,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+
+	"github.com/teknik-github/kcli/internal/k8s"
 )
 
 // pfLog is a bounded, line-oriented, concurrency-safe sink for a port-forward's
@@ -321,9 +323,10 @@ func (a *App) stopForward(pf *portForward) {
 	}
 }
 
-// forwardLines formats each mapping as "0.0.0.0:LOCAL -> REMOTE", reflecting the
-// bind address (reachable from other hosts, not just localhost).
+// forwardLines formats each mapping as "<bind>:LOCAL -> REMOTE", reflecting the
+// configured bind address (KCLI_PF_ADDRESS, default 0.0.0.0).
 func forwardLines(ports []string) string {
+	addr := k8s.ForwardBindAddresses()[0]
 	lines := make([]string, 0, len(ports))
 	for _, p := range ports {
 		local, remote, found := strings.Cut(p, ":")
@@ -331,7 +334,7 @@ func forwardLines(ports []string) string {
 			lines = append(lines, p)
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("0.0.0.0:%s -> %s", local, remote))
+		lines = append(lines, fmt.Sprintf("%s:%s -> %s", addr, local, remote))
 	}
 	return strings.Join(lines, "\n")
 }
