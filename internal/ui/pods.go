@@ -178,8 +178,8 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 		}
 		return nil
 	case 'a':
-		if a.splash != nil && !a.splashing {
-			go a.playSplash() // replay the startup splash
+		if a.splash != nil {
+			a.toggleSplash() // show/hide the corner animation
 		}
 		return nil
 	}

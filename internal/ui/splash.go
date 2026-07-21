@@ -7,16 +7,21 @@ import (
 	"image/gif"
 	"math"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
-// splashMaxDim caps the pre-scaled frame size held in memory; the Draw step
-// scales further down to the terminal. 240 px is ample for half-block output.
-const splashMaxDim = 240
+const (
+	// splashMaxDim caps the pre-scaled frame size held in memory; the Draw step
+	// scales further down. 240 px is ample for half-block output.
+	splashMaxDim = 240
+	// splashCols/splashRows size the corner box (cells). Two sub-pixels per row
+	// make splashCols × (splashRows*2) ≈ square for a square GIF.
+	splashCols = 30
+	splashRows = 15
+)
 
 // splashAnim is a decoded GIF: composited, opaque, pre-scaled RGBA frames with
 // their inter-frame delays.
@@ -104,18 +109,14 @@ func scaleNearest(src *image.RGBA, w, h int) *image.RGBA {
 // background, doubling vertical resolution. Any key invokes onDone (skip).
 type splashView struct {
 	*tview.Box
-	anim   *splashAnim
-	frame  int
-	onDone func()
+	anim  *splashAnim
+	frame int
 }
 
-func newSplashView(anim *splashAnim, onDone func()) *splashView {
-	s := &splashView{Box: tview.NewBox(), anim: anim, onDone: onDone}
+func newSplashView(anim *splashAnim) *splashView {
+	s := &splashView{Box: tview.NewBox(), anim: anim}
 	s.Box.SetBackgroundColor(tcell.ColorBlack)
-	s.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
-		s.onDone()
-		return nil
-	})
+	s.Box.SetBorder(true).SetBorderColor(tcell.ColorGray) // a small framed "screen"
 	return s
 }
 
@@ -150,8 +151,6 @@ func (s *splashView) Draw(screen tcell.Screen) {
 			screen.SetContent(offX+cx, offY+cy, '▀', nil, style)
 		}
 	}
-
-	tview.Print(screen, "any key skips", x, y+h-1, w, tview.AlignCenter, tcell.ColorGray)
 }
 
 // sampleFit nearest-samples the img pixel for target coord (tx,ty) in a dw×dh grid.
@@ -166,45 +165,67 @@ func rgb(c color.RGBA) tcell.Color {
 	return tcell.NewRGBColor(int32(c.R), int32(c.G), int32(c.B))
 }
 
-// playSplash overlays the splash page and advances frames on their own timing
-// until the GIF ends once or any key skips, then removes the page and returns
-// focus to the table. Re-entrant calls (the replay key) are dropped while one
-// is already on screen. All widget/state access happens inside QueueUpdateDraw.
-func (a *App) playSplash() {
-	done := make(chan struct{})
-	var once sync.Once
-	finish := func() { once.Do(func() { close(done) }) }
-
-	started := make(chan bool, 1)
-	a.tv.QueueUpdateDraw(func() {
-		if a.splashing {
-			started <- false
-			return
-		}
-		a.splashing = true
-		a.splashView = newSplashView(a.splash, finish)
-		a.pages.AddPage("splash", a.splashView, true, true)
-		a.tv.SetFocus(a.splashView)
-		started <- true
-	})
-	if !<-started {
-		return // already playing
+// startSplash overlays the animated GIF in the bottom-right corner of the main
+// screen and loops it. The table keeps focus — the corner is decorative. No-op
+// if already showing. Must run on the UI goroutine.
+func (a *App) startSplash() {
+	if a.splashing || a.splash == nil {
+		return
 	}
+	a.splashing = true
+	a.splashView = newSplashView(a.splash)
+	a.splashStop = make(chan struct{})
+	a.pages.AddPage("splash", a.splashCorner(a.splashView), true, true)
+	a.tv.SetFocus(a.table) // keys still go to the table, not the corner
+	go a.animateSplash(a.splashView, a.splashStop)
+}
 
-loop:
-	for i := range a.splash.frames {
+// stopSplash removes the corner animation. Must run on the UI goroutine.
+func (a *App) stopSplash() {
+	if !a.splashing {
+		return
+	}
+	close(a.splashStop)
+	a.pages.RemovePage("splash")
+	a.tv.SetFocus(a.table)
+	a.splashing = false
+}
+
+// toggleSplash shows/hides the corner animation (the `a` key).
+func (a *App) toggleSplash() {
+	if a.splashing {
+		a.stopSplash()
+	} else {
+		a.startSplash()
+	}
+}
+
+// splashCorner wraps view in transparent spacers so it sits in the bottom-right
+// corner — a one-column margin off the right edge and one row above the footer.
+// The nil spacers draw nothing, so the main view shows through around the box.
+func (a *App) splashCorner(view *splashView) tview.Primitive {
+	row := tview.NewFlex().SetDirection(tview.FlexColumn).
+		AddItem(nil, 0, 1, false).           // left spacer
+		AddItem(view, splashCols, 0, false). // the box
+		AddItem(nil, 1, 0, false)            // right margin
+	return tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(nil, 0, 1, false).          // top spacer
+		AddItem(row, splashRows, 0, false). // the box row
+		AddItem(nil, 1, 0, false)           // bottom margin (above the footer)
+}
+
+// animateSplash loops view's frames forever on the GIF's own timing until stop
+// is closed. view is captured so a toggle-off mid-frame can't touch a new view.
+func (a *App) animateSplash(view *splashView, stop chan struct{}) {
+	i := 0
+	for {
 		frame := i
-		a.tv.QueueUpdateDraw(func() { a.splashView.frame = frame })
+		a.tv.QueueUpdateDraw(func() { view.frame = frame })
 		select {
-		case <-done: // skipped
-			break loop
+		case <-stop:
+			return
 		case <-time.After(a.splash.delays[i]):
 		}
+		i = (i + 1) % len(a.splash.frames)
 	}
-
-	a.tv.QueueUpdateDraw(func() {
-		a.pages.RemovePage("splash")
-		a.tv.SetFocus(a.table)
-		a.splashing = false
-	})
 }

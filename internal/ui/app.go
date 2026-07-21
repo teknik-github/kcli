@@ -47,9 +47,10 @@ type App struct {
 	graphStop  chan struct{}      // stops the live graph sampler when non-nil
 	logsCancel context.CancelFunc // cancels the active log stream when non-nil
 
-	splash     *splashAnim // decoded startup GIF, nil unless KCLI_SPLASH is set
-	splashView *splashView // active splash primitive while playing
-	splashing  bool        // true while the splash is on screen
+	splash     *splashAnim   // decoded GIF, nil unless KCLI_SPLASH is set
+	splashView *splashView   // active corner animation primitive while showing
+	splashing  bool          // true while the corner animation is on screen
+	splashStop chan struct{} // closed to stop the corner animation loop
 
 	rows      []Row          // current view's data, in fetch order
 	forwards  []*portForward // active background port-forwards
@@ -160,7 +161,9 @@ func (a *App) Run() error {
 	go a.autoRefresh()
 	go a.watchLoop()
 	if a.splash != nil {
-		go a.playSplash()
+		// Start the corner animation once the event loop is running (QueueUpdateDraw
+		// blocks until then, so it can't be called synchronously before tv.Run).
+		go func() { a.tv.QueueUpdateDraw(a.startSplash) }()
 	}
 	return a.tv.Run()
 }

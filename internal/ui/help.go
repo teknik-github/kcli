@@ -26,7 +26,7 @@ func (a *App) showHelp() {
 		{"n", "switch namespace"},
 		{"x", "switch context (kubeconfig)"},
 		{"r", "refresh now"},
-		{"a", "replay startup splash (needs $KCLI_SPLASH)"},
+		{"a", "toggle corner GIF animation (needs $KCLI_SPLASH)"},
 		{"q", "quit (or leave a hidden view)"},
 		{"?", "this help"},
 	})
