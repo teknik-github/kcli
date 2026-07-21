@@ -9,9 +9,16 @@ import (
 	"k8s.io/client-go/transport/spdy"
 )
 
+// forwardAddresses is the set of local addresses the forward binds. 0.0.0.0
+// exposes the forwarded port on all IPv4 interfaces (not just loopback), so it
+// is reachable from other hosts — e.g. from your workstation when kcli runs on
+// a remote server over SSH.
+var forwardAddresses = []string{"0.0.0.0"}
+
 // PortForward forwards local ports to a pod. ports are "local:remote" strings
-// (e.g. "8080:80"). It blocks until stopCh is closed, so callers should run it
-// in a goroutine; readyCh is closed once forwarding is established.
+// (e.g. "8080:80"). It binds forwardAddresses (0.0.0.0). It blocks until stopCh
+// is closed, so callers should run it in a goroutine; readyCh is closed once
+// forwarding is established.
 func (c *Client) PortForward(namespace, pod string, ports []string, out, errOut io.Writer, stopCh <-chan struct{}, readyCh chan struct{}) error {
 	req := c.clientset.CoreV1().RESTClient().
 		Post().
@@ -26,7 +33,7 @@ func (c *Client) PortForward(namespace, pod string, ports []string, out, errOut 
 	}
 	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", req.URL())
 
-	fw, err := portforward.New(dialer, ports, stopCh, readyCh, out, errOut)
+	fw, err := portforward.NewOnAddresses(dialer, forwardAddresses, ports, stopCh, readyCh, out, errOut)
 	if err != nil {
 		return fmt.Errorf("init port-forward: %w", err)
 	}

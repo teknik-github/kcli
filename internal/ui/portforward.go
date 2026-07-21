@@ -33,7 +33,8 @@ func (l *pfLog) Write(p []byte) (int, error) {
 		if i < 0 {
 			break
 		}
-		l.lines = append(l.lines, string(l.buf[:i]))
+		line := strings.TrimRight(string(l.buf[:i]), "\r")
+		l.lines = append(l.lines, time.Now().Format("15:04:05")+"  "+line)
 		l.buf = append([]byte(nil), l.buf[i+1:]...)
 	}
 	if len(l.lines) > pfLogMaxLines {
@@ -320,7 +321,8 @@ func (a *App) stopForward(pf *portForward) {
 	}
 }
 
-// forwardLines formats each mapping as "localhost:LOCAL -> REMOTE".
+// forwardLines formats each mapping as "0.0.0.0:LOCAL -> REMOTE", reflecting the
+// bind address (reachable from other hosts, not just localhost).
 func forwardLines(ports []string) string {
 	lines := make([]string, 0, len(ports))
 	for _, p := range ports {
@@ -329,7 +331,7 @@ func forwardLines(ports []string) string {
 			lines = append(lines, p)
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("localhost:%s -> %s", local, remote))
+		lines = append(lines, fmt.Sprintf("0.0.0.0:%s -> %s", local, remote))
 	}
 	return strings.Join(lines, "\n")
 }
