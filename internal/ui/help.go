@@ -23,6 +23,8 @@ func (a *App) showHelp() {
 		{"T", "rename the active tab (empty = auto label)"},
 		{"[ / ]", "previous / next tab"},
 		{"alt+1..9", "jump to tab 1..9"},
+		{"| / -", "split the screen (side by side / stacked); again = unsplit"},
+		{"\\", "move focus to the other split pane"},
 		{":", "command-jump to any resource by name/alias (incl. CRDs)"},
 		{"/", "filter rows (any column)"},
 		{"esc", "clear the active filter"},

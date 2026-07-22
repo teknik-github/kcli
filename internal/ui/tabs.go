@@ -87,10 +87,17 @@ func (a *App) loadTab(i int) {
 
 	a.publishCadence()
 	a.table.Clear()
+	// Reassign the panes before painting: the incoming tab may already be on
+	// screen in the other pane, in which case the panes swap position.
+	if a.fixPanes() {
+		a.rebuildBody()
+	}
+	a.drawPaneTitles()
 	a.drawTabbar()
 	a.drawTabs()
 	a.drawHeader()
 	a.drawTable()
+	a.drawSplitPane()
 	if t.selRow > 0 {
 		a.table.Select(t.selRow, 0)
 	}
@@ -124,6 +131,16 @@ func (a *App) closeTab() {
 	}
 	i := a.activeTab
 	a.tabList = append(a.tabList[:i], a.tabList[i+1:]...)
+	// Removing a tab shifts every later index: fix up what the panes point at
+	// (-1 means "gone", which fixPanes re-picks) before loading.
+	for p := range a.paneTabs {
+		switch {
+		case a.paneTabs[p] == i:
+			a.paneTabs[p] = -1
+		case a.paneTabs[p] > i:
+			a.paneTabs[p]--
+		}
+	}
 	if i >= len(a.tabList) {
 		i = len(a.tabList) - 1
 	}
@@ -166,16 +183,30 @@ func (a *App) drawTabbar() {
 	}
 	a.flex.ResizeItem(a.tabbar, 1, 0)
 
+	_, partner, split := a.splitPaneTab() // the tab sharing the screen, if any
+
 	var b strings.Builder
 	for i := range a.tabList {
 		label := fmt.Sprintf(" %d:%s ", i+1, a.tabTitle(i))
-		if i == a.activeTab {
+		switch {
+		case i == a.activeTab:
 			fmt.Fprintf(&b, "[black:%s:b]%s[-:-:-] ", a.accent, label)
-		} else {
+		case split && i == partner: // also on screen, just not focused
+			fmt.Fprintf(&b, "[%s::u]%s[-:-:-] ", a.accent, label)
+		default:
 			fmt.Fprintf(&b, "[%s]%s[-] ", a.accent, label)
 		}
 	}
 	a.tabbar.SetText(b.String())
+}
+
+// drawTabChrome repaints everything that carries a tab's label: the workspace
+// strip and, while split, the pane borders. Call it after anything that changes
+// what a tab is showing — a view switch, a namespace change, a rename — since
+// those all move the auto title.
+func (a *App) drawTabChrome() {
+	a.drawTabbar()
+	a.drawPaneTitles()
 }
 
 // tabbarVisible reports whether the workspace strip should show: with more than
@@ -218,7 +249,7 @@ func (a *App) renameTab() {
 	input.SetDoneFunc(func(key tcell.Key) {
 		if key == tcell.KeyEnter {
 			a.tabList[a.activeTab].name = strings.TrimSpace(input.GetText())
-			a.drawTabbar()
+			a.drawTabChrome()
 		}
 		a.closeModal("rename")
 	})

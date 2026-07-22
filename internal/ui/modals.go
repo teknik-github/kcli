@@ -50,6 +50,7 @@ func (a *App) setNamespace(ns string) {
 	a.namespace = ns
 	a.clearMarks() // row identities change with the namespace
 	a.closeModal("namespace")
+	a.drawTabChrome() // the tab label carries the namespace
 	go a.refresh()
 }
 

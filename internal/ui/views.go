@@ -38,11 +38,14 @@ func resolveView(query string) (int, bool) {
 // keys) contain the active filter (case-insensitive). An empty filter matches
 // everything. Searching every cell lets you filter by any column — e.g. Events
 // by reason/object, Pods by node or status.
-func (a *App) match(r Row) bool {
-	if a.filter == "" {
+func (a *App) match(r Row) bool { return rowMatches(r, strings.ToLower(a.filter)) }
+
+// rowMatches is match with the filter already lowercased, so a parked tab's rows
+// (split pane) can be filtered without the App's live fields.
+func rowMatches(r Row, f string) bool {
+	if f == "" {
 		return true
 	}
-	f := strings.ToLower(a.filter)
 	if strings.Contains(strings.ToLower(r.Namespace), f) ||
 		strings.Contains(strings.ToLower(r.Name), f) {
 		return true
@@ -67,27 +70,33 @@ func (a *App) clearFilter() {
 // filteredRows returns the current view's rows matching the active filter and
 // ordered by the active sort column (fetch order when unsorted).
 func (a *App) filteredRows() []Row {
+	return filterSortRows(a.rows, a.filter, a.sortCol, a.sortDesc)
+}
+
+// filterSortRows is filteredRows over explicit state, so a parked tab shown in
+// the other split pane goes through exactly the same filter and sort.
+func filterSortRows(rows []Row, filter string, sortCol int, sortDesc bool) []Row {
 	var out []Row
-	if a.filter == "" {
-		if a.sortCol < 0 {
-			return a.rows // no filter, no sort: hand back the original slice
+	if filter == "" {
+		if sortCol < 0 {
+			return rows // no filter, no sort: hand back the original slice
 		}
-		out = append(out, a.rows...) // copy so sorting never mutates a.rows
+		out = append(out, rows...) // copy so sorting never mutates the source
 	} else {
-		out = make([]Row, 0, len(a.rows))
-		for _, r := range a.rows {
-			if a.match(r) {
+		f := strings.ToLower(filter)
+		out = make([]Row, 0, len(rows))
+		for _, r := range rows {
+			if rowMatches(r, f) {
 				out = append(out, r)
 			}
 		}
 	}
-	a.sortRows(out)
+	sortRowsBy(out, sortCol, sortDesc)
 	return out
 }
 
-// sortRows orders rows in place by the active sort column, if any.
-func (a *App) sortRows(rows []Row) {
-	col := a.sortCol
+// sortRowsBy orders rows in place by the given column, if any.
+func sortRowsBy(rows []Row, col int, desc bool) {
 	if col < 0 {
 		return
 	}
@@ -96,7 +105,7 @@ func (a *App) sortRows(rows []Row) {
 		if x == y {
 			return false // keep stable order for equal cells
 		}
-		if a.sortDesc {
+		if desc {
 			return cellLess(y, x)
 		}
 		return cellLess(x, y)

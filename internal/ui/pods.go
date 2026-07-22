@@ -9,32 +9,8 @@ import (
 // row. The view's StatusCol (if any) is color-coded.
 func (a *App) drawTable() {
 	row, _ := a.table.GetSelection()
-	a.table.Clear()
-
-	view := a.view()
-	for c, title := range view.Columns {
-		a.table.SetCell(0, c, tview.NewTableCell(title).
-			SetTextColor(tcell.ColorYellow).
-			SetAttributes(tcell.AttrBold).
-			SetSelectable(false))
-	}
-
 	rows := a.filteredRows()
-	for r, row := range rows {
-		marked := a.marked[rowKey(row)]
-		for c, val := range row.Cells {
-			// Escape so message text containing "[...]" is not parsed as a
-			// tview colour tag; status colouring uses SetTextColor, not tags.
-			cell := tview.NewTableCell(tview.Escape(val))
-			if c == view.StatusCol {
-				cell.SetTextColor(statusColor(val))
-			}
-			if marked {
-				cell.SetBackgroundColor(markColor) // multi-select highlight
-			}
-			a.table.SetCell(r+1, c, cell)
-		}
-	}
+	drawRows(a.table, a.view(), rows, a.marked)
 
 	// Keep the cursor in range after the row count changes.
 	if max := len(rows); row > max {
@@ -44,6 +20,34 @@ func (a *App) drawTable() {
 		row = 1
 	}
 	a.table.Select(row, 0)
+}
+
+// drawRows fills a table widget from display-ready rows. It takes the view and
+// rows explicitly (rather than reading App state) so the same renderer paints
+// the live pane and the parked tab shown in the other split pane.
+func drawRows(tbl *tview.Table, view *viewDef, rows []Row, marked map[string]bool) {
+	tbl.Clear()
+	for c, title := range view.Columns {
+		tbl.SetCell(0, c, tview.NewTableCell(title).
+			SetTextColor(tcell.ColorYellow).
+			SetAttributes(tcell.AttrBold).
+			SetSelectable(false))
+	}
+	for r, row := range rows {
+		isMarked := marked[rowKey(row)]
+		for c, val := range row.Cells {
+			// Escape so message text containing "[...]" is not parsed as a
+			// tview colour tag; status colouring uses SetTextColor, not tags.
+			cell := tview.NewTableCell(tview.Escape(val))
+			if c == view.StatusCol {
+				cell.SetTextColor(statusColor(val))
+			}
+			if isMarked {
+				cell.SetBackgroundColor(markColor) // multi-select highlight
+			}
+			tbl.SetCell(r+1, c, cell)
+		}
+	}
 }
 
 // onTableKey handles global key bindings while the table is focused.
@@ -110,6 +114,15 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 	case ']':
 		a.nextTab()
+		return nil
+	case '|':
+		a.toggleSplit(splitVert) // two panes side by side (press again to unsplit)
+		return nil
+	case '-':
+		a.toggleSplit(splitHoriz) // two panes stacked
+		return nil
+	case '\\':
+		a.swapPane() // move focus (and the live session) to the other pane
 		return nil
 	case 'r':
 		go a.refresh()

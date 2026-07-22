@@ -31,6 +31,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Filter** (any-column substring) & **sort** by column (duration- and number-aware).
 - **Safe secrets**: values are always masked (`<redacted: N bytes>`) when describing; plain-text reveal (`v`) is a separate, confirmed action.
 - **Tabs** (`t` new, `w` close, `[`/`]` switch, `Alt`+`N` jump): keep several independent view sessions open — each remembers its own resource, namespace, filter, sort, and selection — for side-by-side monitoring.
+- **Split view** (`|` side by side, `-` stacked, `\` switch pane): show two tabs at once — e.g. Pods beside Deployments, or the same resource in two namespaces. Both panes refresh live; keys drive the focused one.
 - **Context switching** (`x`): switch cluster/context at runtime, no restart.
 - **Help overlay** (`?`): every key binding + the `:jump` aliases.
 - **Optional config file**: default namespace, refresh cadence, accent colour, and custom `:jump` aliases (`~/.config/kcli/config.yaml`).
@@ -152,6 +153,8 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `T`                 | Rename the active tab (empty name reverts to the auto label)    |
 | `[` / `]`           | Previous / next tab                                             |
 | `Alt`+`1`–`9`       | Jump to the Nth tab                                             |
+| `\|` / `-`           | Split the screen side by side / stacked (same key again unsplits) |
+| `\`                 | Move focus to the other split pane                              |
 | `?`                 | Help overlay (all keys + `:jump` aliases)                       |
 | `Enter`             | Resource detail (`describe` YAML + events)                      |
 | `/`                 | Filter (any-column substring; empty submit or `Esc` clears)     |
@@ -201,6 +204,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 
 - **Command-jump** (`:`): type a resource name or short alias (`svc`, `deploy`, `cj`, `ev`, `pf`, …). Registered views switch instantly; anything else is resolved against the cluster's discovery info and opened as a generic view — this is how CRDs and any other GVR are reached. Short names resolve the same way kubectl does.
 - **Dynamic / CRD view**: read-only. Generic NAMESPACE/NAME/AGE columns with full YAML detail on `Enter`. `Tab`, another `:`, or `q` leaves it (it is not in the numbered tab bar).
+- **Split view** (`|`, `-`, `\`): a layout over the tabs, not a second kind of session — each pane shows one tab. `|` on a single tab clones it first, so one key gets you two panes. The focused pane is the live one (accent border); the other is greyed and read-only until you `\` into it, and both are reloaded on the same refresh tick. Every other key (filter, sort, actions, view switch) applies to the focused pane only. Closing a tab (`w`) down to one unsplits automatically.
 - **Logs**: follows the last 500 lines by default. Press `p` to switch to the **previous** container instance's logs (useful for `CrashLoopBackOff`), and `/` to **grep** the buffer (filters in place, keeps following).
 - **Multi-pod tail** (`L`): one pane, one follow stream per pod, capped at 20 pods (the extras are dropped and the title says so, e.g. `tail: 20 of 29 pods`). Targets are the marked rows when any are marked, otherwise every row the filter leaves on screen — so `/nginx` then `L` tails a whole deployment. Each pod gets a coloured name prefix (`ns/name` when the tail spans namespaces); the pane's `/` grep matches the prefix as well as the line, so it can narrow back to a single pod. Follows the first regular container of each pod, like `kubectl logs` with no `-c`.
 - **Exec**: the TUI is *suspended* and the terminal is handed to the shell; it resumes automatically when the shell exits. Multi-container pods show a container picker (init containers first).
@@ -241,6 +245,7 @@ app.go           App (widget tree + state), refresh loop (loadCurrentView), head
 views.go         generic filter & sort (cellLess), resolveView (:jump), humanAge
 pods.go          drawTable + key handler (onTableKey)
 tabs.go          browser-style tabs (tabState sessions, workspace strip, rename)
+split.go         two-pane split layout over the tabs (pane focus, parked-pane refresh)
 selection.go     multi-select marks + bulk delete
 modals.go        detail, logs (stream + grep), scale, delete, restart, rollback, cordon, drain, reveal, filter, namespace, :jump prompt
 multilog.go      multi-pod tail (fan-out streams, coloured pod prefixes, grep)

@@ -29,7 +29,9 @@ type App struct {
 	header *tview.TextView
 	tabbar *tview.TextView // workspace (multi-tab) strip; hidden when only one tab
 	tabs   *tview.TextView
+	body   *tview.Flex // holds the table, or both panes while split
 	table  *tview.Table
+	table2 *tview.Table // parked tab's pane, only on screen while split
 	footer *tview.TextView
 
 	// Browser-style tabs: each holds an independent view session (resource,
@@ -38,6 +40,14 @@ type App struct {
 	// outgoing tab and restores the incoming one (see tabs.go).
 	tabList   []*tabState
 	activeTab int
+
+	// Split view (see split.go): two tabs on screen at once. a.table always holds
+	// the live tab and a.table2 the parked one; activePane is the position
+	// (0 = left/top, 1 = right/bottom) a.table is laid out at, and paneTabs maps
+	// each position to the tab it shows.
+	split      int // splitOff / splitVert / splitHoriz
+	activePane int
+	paneTabs   [2]int
 
 	viewIdx     int    // index into resourceViews
 	prevViewIdx int    // view to return to when leaving a hidden (Local) view
@@ -125,6 +135,14 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 	a.table.SetSelectedStyle(tcell.StyleDefault.
 		Background(accentColor(a.accent)).Foreground(tcell.ColorWhite))
 
+	// The parked split pane is never focused, so it carries no cursor — its
+	// role is fixed to this widget, which is what lets the panes swap position
+	// without moving any state (see split.go).
+	a.table2 = tview.NewTable().
+		SetBorders(false).
+		SetSelectable(false, false).
+		SetFixed(1, 0)
+
 	// Top band, k9s-style: the info block grows to fill the left while the logo
 	// keeps its natural width pinned to the right. The band is as tall as the
 	// banner so the stacked info lines fill the left side.
@@ -132,13 +150,17 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 		AddItem(a.header, 0, 1, false).
 		AddItem(a.logo, utf8.RuneCountInString(logoLines[0]), 0, false)
 
+	// body holds the table; rebuildBody swaps in the two-pane layout when split.
+	a.body = tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(a.table, 0, 1, true)
+
 	// The tabbar row starts at height 0 (single tab); drawTabbar resizes it to 1
 	// once a second tab exists, so single-tab users see no extra chrome.
 	a.flex = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(top, len(logoLines), 0, false).
 		AddItem(a.tabbar, 0, 0, false).
 		AddItem(a.tabs, 1, 0, false).
-		AddItem(a.table, 0, 1, true).
+		AddItem(a.body, 0, 1, true).
 		AddItem(a.footer, 1, 0, false)
 
 	// Start with a single tab holding the initial session.
@@ -257,6 +279,8 @@ func (a *App) loadCurrentView() {
 	cl := a.client
 	view := resourceViews[idx]
 
+	a.loadSplitPane() // the parked pane (if split) reloads on the same cadence
+
 	// Local views (port-forwards) are backed by App state, not the cluster.
 	if view.Local {
 		a.rows = a.forwardRows()
@@ -306,6 +330,7 @@ func (a *App) switchView(i int) {
 	a.publishCadence()
 	a.table.Clear()
 	a.drawTabs()
+	a.drawTabChrome() // the tab's auto label follows the view
 	a.drawHeader()
 	go a.refresh()
 }
