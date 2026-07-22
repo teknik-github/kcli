@@ -1332,6 +1332,20 @@ func (c *Client) PodContainers(ctx context.Context, namespace, name string) ([]s
 	return names, nil
 }
 
+// PodMainContainer returns the pod's first regular (non-init) container — the
+// one `kubectl logs` defaults to. Used by the multi-pod tail, which follows many
+// pods at once and so cannot prompt for a container per pod.
+func (c *Client) PodMainContainer(ctx context.Context, namespace, name string) (string, error) {
+	p, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	if len(p.Spec.Containers) == 0 {
+		return "", fmt.Errorf("pod %s has no containers", name)
+	}
+	return p.Spec.Containers[0].Name, nil
+}
+
 // PodLogs fetches the last tailLines log lines of the named container. An empty
 // container lets the server pick (valid only for single-container pods).
 func (c *Client) PodLogs(ctx context.Context, namespace, name, container string, tailLines int64) (string, error) {

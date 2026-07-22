@@ -148,6 +148,11 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 			a.showLogs()
 		}
 		return nil
+	case 'L':
+		if caps.Logs {
+			a.showMultiLogs() // tail marked rows (or the whole filtered list) at once
+		}
+		return nil
 	case 'e':
 		if caps.Exec {
 			a.execShell()

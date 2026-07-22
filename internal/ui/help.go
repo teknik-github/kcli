@@ -38,7 +38,9 @@ func (a *App) showHelp() {
 	b.WriteString("\n[aqua::b]actions (apply where the view supports them)[-::-]\n")
 	writeKeys(&b, [][2]string{
 		{"enter", "detail (YAML + events)"},
-		{"l", "logs (follow; p toggles previous, / greps)"},		{"e", "exec shell"},
+		{"l", "logs (follow; p toggles previous, / greps)"},
+		{"L", "tail many pods at once (marked rows, else all visible)"},
+		{"e", "exec shell"},
 		{"E", "edit YAML in $EDITOR and apply"},
 		{"g", "live CPU/MEM graph"},
 		{"f", "port-forward (pods and services)"},

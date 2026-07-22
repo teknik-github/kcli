@@ -24,6 +24,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Auto-refresh** every 3 seconds (per-view cadence; Events poll slower) — mainly a metrics refresh and a safety net now that resource changes are watch-driven.
 - **Live metrics** (CPU/MEM columns + graphs) via metrics-server — *best-effort*; if metrics-server is absent it never errors, the columns just render `-`.
 - **Log streaming (follow)** with a toggle to a crashed container's *previous* logs, and an in-pane **grep** (`/`).
+- **Multi-pod tail** (`L`): follow many pods in one pane — the marked rows, or every pod the current filter shows. Each line is prefixed with its pod name in its own colour, and `/` greps pod names as well as line text.
 - **Interactive exec shell** into a container (auto-fallback `bash` → `sh`).
 - **Live CPU/MEM graphs** (sparklines) for pods and nodes.
 - **Actions**: describe (YAML + events), edit YAML in `$EDITOR`, scale, rollout restart, **rollout undo**, delete, cordon/uncordon & drain nodes, **reveal secret** values, port-forward (pods *and* services).
@@ -161,6 +162,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `r`                 | Manual refresh                                                  |
 | `a`                 | Toggle the corner GIF animation (when `$KCLI_SPLASH` is set)    |
 | `l`                 | Logs (follow; inside: `p` toggle previous, `/` grep, `q`/`Esc` close) |
+| `L`                 | Tail many pods at once (marked rows, else every visible row)     |
 | `e`                 | Interactive exec shell                                          |
 | `E`                 | Edit YAML in `$EDITOR` and apply on save                        |
 | `g`                 | Live CPU/MEM graph                                              |
@@ -200,6 +202,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 - **Command-jump** (`:`): type a resource name or short alias (`svc`, `deploy`, `cj`, `ev`, `pf`, …). Registered views switch instantly; anything else is resolved against the cluster's discovery info and opened as a generic view — this is how CRDs and any other GVR are reached. Short names resolve the same way kubectl does.
 - **Dynamic / CRD view**: read-only. Generic NAMESPACE/NAME/AGE columns with full YAML detail on `Enter`. `Tab`, another `:`, or `q` leaves it (it is not in the numbered tab bar).
 - **Logs**: follows the last 500 lines by default. Press `p` to switch to the **previous** container instance's logs (useful for `CrashLoopBackOff`), and `/` to **grep** the buffer (filters in place, keeps following).
+- **Multi-pod tail** (`L`): one pane, one follow stream per pod, capped at 20 pods (the extras are dropped and the title says so, e.g. `tail: 20 of 29 pods`). Targets are the marked rows when any are marked, otherwise every row the filter leaves on screen — so `/nginx` then `L` tails a whole deployment. Each pod gets a coloured name prefix (`ns/name` when the tail spans namespaces); the pane's `/` grep matches the prefix as well as the line, so it can narrow back to a single pod. Follows the first regular container of each pod, like `kubectl logs` with no `-c`.
 - **Exec**: the TUI is *suspended* and the terminal is handed to the shell; it resumes automatically when the shell exits. Multi-container pods show a container picker (init containers first).
 - **Edit** (`E`): fetches the live YAML (no events, secrets unmasked so values round-trip), opens it in `$EDITOR` (the TUI suspends), and on save applies it with an Update via the dynamic client. Unchanged buffers are a no-op.
 - **Rollout restart** (`R`): stamps the `kubectl.kubernetes.io/restartedAt` annotation — identical to `kubectl rollout restart`.
@@ -240,6 +243,7 @@ pods.go          drawTable + key handler (onTableKey)
 tabs.go          browser-style tabs (tabState sessions, workspace strip, rename)
 selection.go     multi-select marks + bulk delete
 modals.go        detail, logs (stream + grep), scale, delete, restart, rollback, cordon, drain, reveal, filter, namespace, :jump prompt
+multilog.go      multi-pod tail (fan-out streams, coloured pod prefixes, grep)
 dynamic.go       jumpToView / jumpDynamic / setDynamicView (generic CRD view)
 help.go          the `?` help overlay
 edit.go          edit YAML in $EDITOR and apply
