@@ -19,6 +19,10 @@ func (a *App) showHelp() {
 	writeKeys(&b, [][2]string{
 		{"tab / shift-tab", "cycle views"},
 		{"1..9", "jump to view 1..9"},
+		{"t / w", "new tab (clone current) / close tab"},
+		{"T", "rename the active tab (empty = auto label)"},
+		{"[ / ]", "previous / next tab"},
+		{"alt+1..9", "jump to tab 1..9"},
 		{":", "command-jump to any resource by name/alias (incl. CRDs)"},
 		{"/", "filter rows (any column)"},
 		{"esc", "clear the active filter"},
@@ -34,8 +38,7 @@ func (a *App) showHelp() {
 	b.WriteString("\n[aqua::b]actions (apply where the view supports them)[-::-]\n")
 	writeKeys(&b, [][2]string{
 		{"enter", "detail (YAML + events)"},
-		{"l", "logs (follow; p toggles previous, / greps)"},
-		{"e", "exec shell"},
+		{"l", "logs (follow; p toggles previous, / greps)"},		{"e", "exec shell"},
 		{"E", "edit YAML in $EDITOR and apply"},
 		{"g", "live CPU/MEM graph"},
 		{"f", "port-forward (pods and services)"},

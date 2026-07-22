@@ -70,6 +70,14 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 		}
 	}
 
+	// Alt+1..9 jump straight to tab N (checked before the plain-digit view jump).
+	if event.Modifiers()&tcell.ModAlt != 0 {
+		if r := event.Rune(); r >= '1' && r <= '9' {
+			a.gotoTab(int(r - '1'))
+			return nil
+		}
+	}
+
 	// Number keys 1..N jump straight to a view.
 	if r := event.Rune(); r >= '1' && r <= '9' {
 		a.switchView(int(r - '1'))
@@ -87,6 +95,21 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 	case ' ':
 		a.toggleMark() // multi-select: mark/unmark the current row (Delete-capable views)
+		return nil
+	case 't':
+		a.newTab() // open a new tab cloning the current view
+		return nil
+	case 'T':
+		a.renameTab() // set a custom label for the active tab
+		return nil
+	case 'w':
+		a.closeTab() // close the active tab (keeps at least one)
+		return nil
+	case '[':
+		a.prevTab()
+		return nil
+	case ']':
+		a.nextTab()
 		return nil
 	case 'r':
 		go a.refresh()

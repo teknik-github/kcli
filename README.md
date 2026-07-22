@@ -29,6 +29,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Actions**: describe (YAML + events), edit YAML in `$EDITOR`, scale, rollout restart, **rollout undo**, delete, cordon/uncordon & drain nodes, **reveal secret** values, port-forward (pods *and* services).
 - **Filter** (any-column substring) & **sort** by column (duration- and number-aware).
 - **Safe secrets**: values are always masked (`<redacted: N bytes>`) when describing; plain-text reveal (`v`) is a separate, confirmed action.
+- **Tabs** (`t` new, `w` close, `[`/`]` switch, `Alt`+`N` jump): keep several independent view sessions open — each remembers its own resource, namespace, filter, sort, and selection — for side-by-side monitoring.
 - **Context switching** (`x`): switch cluster/context at runtime, no restart.
 - **Help overlay** (`?`): every key binding + the `:jump` aliases.
 - **Optional config file**: default namespace, refresh cadence, accent colour, and custom `:jump` aliases (`~/.config/kcli/config.yaml`).
@@ -146,6 +147,10 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `1`–`9`             | Jump directly to the Nth view (first nine)                      |
 | `:`                 | Command-jump by name/alias — any view, plus CRDs & any GVR      |
 | `Tab` / `Shift-Tab` | Cycle to the next / previous view                               |
+| `t` / `w`           | New tab (clones current view) / close tab                       |
+| `T`                 | Rename the active tab (empty name reverts to the auto label)    |
+| `[` / `]`           | Previous / next tab                                             |
+| `Alt`+`1`–`9`       | Jump to the Nth tab                                             |
 | `?`                 | Help overlay (all keys + `:jump` aliases)                       |
 | `Enter`             | Resource detail (`describe` YAML + events)                      |
 | `/`                 | Filter (any-column substring; empty submit or `Esc` clears)     |
@@ -232,6 +237,8 @@ registry.go      ★ single source of truth: the list of viewDefs
 app.go           App (widget tree + state), refresh loop (loadCurrentView), header/tabs, logo
 views.go         generic filter & sort (cellLess), resolveView (:jump), humanAge
 pods.go          drawTable + key handler (onTableKey)
+tabs.go          browser-style tabs (tabState sessions, workspace strip, rename)
+selection.go     multi-select marks + bulk delete
 modals.go        detail, logs (stream + grep), scale, delete, restart, rollback, cordon, drain, reveal, filter, namespace, :jump prompt
 dynamic.go       jumpToView / jumpDynamic / setDynamicView (generic CRD view)
 help.go          the `?` help overlay

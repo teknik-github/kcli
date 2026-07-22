@@ -24,11 +24,20 @@ type App struct {
 	client *k8s.Client
 
 	pages  *tview.Pages
+	flex   *tview.Flex // root row layout; its tabbar item is resized to 0 with one tab
 	logo   *tview.TextView
 	header *tview.TextView
+	tabbar *tview.TextView // workspace (multi-tab) strip; hidden when only one tab
 	tabs   *tview.TextView
 	table  *tview.Table
 	footer *tview.TextView
+
+	// Browser-style tabs: each holds an independent view session (resource,
+	// namespace, filter, sort, marks, rows, cursor). The active tab's session is
+	// the live App fields below; switching tabs snapshots the live fields into the
+	// outgoing tab and restores the incoming one (see tabs.go).
+	tabList   []*tabState
+	activeTab int
 
 	viewIdx     int    // index into resourceViews
 	prevViewIdx int    // view to return to when leaving a hidden (Local) view
@@ -104,6 +113,7 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 		SetTextAlign(tview.AlignRight) // pin the banner to the top-right corner, k9s-style
 	a.logo.SetText(logoBanner())
 	a.header = tview.NewTextView().SetDynamicColors(true)
+	a.tabbar = tview.NewTextView().SetDynamicColors(true)
 	a.tabs = tview.NewTextView().SetDynamicColors(true)
 	a.footer = tview.NewTextView().SetDynamicColors(true)
 	a.footer.SetText(footerHelp)
@@ -122,13 +132,19 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 		AddItem(a.header, 0, 1, false).
 		AddItem(a.logo, utf8.RuneCountInString(logoLines[0]), 0, false)
 
-	flex := tview.NewFlex().SetDirection(tview.FlexRow).
+	// The tabbar row starts at height 0 (single tab); drawTabbar resizes it to 1
+	// once a second tab exists, so single-tab users see no extra chrome.
+	a.flex = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(top, len(logoLines), 0, false).
+		AddItem(a.tabbar, 0, 0, false).
 		AddItem(a.tabs, 1, 0, false).
 		AddItem(a.table, 0, 1, true).
 		AddItem(a.footer, 1, 0, false)
 
-	a.pages = tview.NewPages().AddPage("main", flex, true, true)
+	// Start with a single tab holding the initial session.
+	a.tabList = []*tabState{{sortCol: -1, namespace: a.namespace}}
+
+	a.pages = tview.NewPages().AddPage("main", a.flex, true, true)
 
 	a.table.SetInputCapture(a.onTableKey)
 	a.tv.SetRoot(a.pages, true).SetFocus(a.table)
@@ -399,7 +415,7 @@ func (a *App) setHeaderError(err error) {
 	a.header.SetText(fmt.Sprintf("[red]error: %v[-]", err))
 }
 
-const footerHelp = "[::b]q[-] quit  [::b]?[-] help  [::b]tab[-] view  [::b]:[-] jump  [::b]enter[-] detail  [::b]/[-] filter  [::b].[-] sort  " +
+const footerHelp = "[::b]q[-] quit  [::b]?[-] help  [::b]tab[-] view  [::b]t[-] newtab  [::b][ ][-] tabs  [::b]:[-] jump  [::b]enter[-] detail  [::b]/[-] filter  [::b].[-] sort  " +
 	"[::b]g[-] graph  [::b]f[-] fwd  [::b]F[-] fwd-view  [::b]l[-] logs  [::b]e[-] exec  [::b]E[-] edit  [::b]s[-] scale  " +
 	"[::b]R[-] restart  [::b]u[-] undo  [::b]v[-] reveal  [::b]c[-] cordon  [::b]D[-] drain  [::b]space[-] mark  [::b]d[-] del  [::b]n[-] ns  [::b]x[-] ctx"
 
