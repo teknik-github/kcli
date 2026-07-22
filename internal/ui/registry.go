@@ -45,6 +45,7 @@ type viewDef struct {
 	Local           bool          // rows come from App state, not the cluster (Fetch unused)
 	Hidden          bool          // omitted from the tab bar and Tab cycling (reach via :jump)
 	Dynamic         bool          // generic view backed by the dynamic client (CRDs, any GVR)
+	Pulse           bool          // health summary; rows are kinds, Enter jumps to that view
 	RefreshInterval time.Duration // per-view auto-refresh cadence; 0 = default (refreshInterval)
 	Caps            viewCaps
 	Fetch           func(ctx context.Context, c *k8s.Client, namespace string) ([]Row, error)
@@ -335,6 +336,20 @@ var resourceViews = []*viewDef{
 			}
 			return rows, nil
 		},
+	},
+	{
+		// Cluster health summary. Appended after the numbered views on purpose:
+		// it has no 1..9 key of its own (it answers to '0' and ":pulse"), so
+		// adding it does not shift anyone's number keys.
+		ID:              "pulse",
+		Aliases:         []string{"overview", "health", "dash"},
+		Title:           "Pulse",
+		Columns:         []string{"RESOURCE", "TOTAL", "OK", "WARN", "HEALTH", "DETAIL"},
+		StatusCol:       4,
+		Pulse:           true,
+		RefreshInterval: 10 * time.Second, // it fans out over every kind; poll gently
+		// Fetch is wired in pulse.go's init: pulseRows reads resourceViews, so
+		// naming it here would be an initialization cycle.
 	},
 	{
 		ID:        "portforward",

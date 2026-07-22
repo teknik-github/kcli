@@ -19,6 +19,7 @@ func (a *App) showHelp() {
 	writeKeys(&b, [][2]string{
 		{"tab / shift-tab", "cycle views"},
 		{"1..9", "jump to view 1..9"},
+		{"0", "Pulse — cluster health summary (enter jumps to a kind)"},
 		{"t / w", "new tab (clone current) / close tab"},
 		{"T", "rename the active tab (empty = auto label)"},
 		{"[ / ]", "previous / next tab"},

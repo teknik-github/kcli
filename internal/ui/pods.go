@@ -61,9 +61,12 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 		a.cycleView(-1)
 		return nil
 	case tcell.KeyEnter:
-		if a.view().Local {
+		switch {
+		case a.view().Local:
 			a.showForwardLog() // Port-Fwd view: Enter shows the forward's log
-		} else {
+		case a.view().Pulse:
+			a.jumpFromPulse() // Pulse: Enter opens the kind under the cursor
+		default:
 			a.showDetail()
 		}
 		return nil
@@ -82,9 +85,14 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 		}
 	}
 
-	// Number keys 1..N jump straight to a view.
+	// Number keys 1..N jump straight to a view; 0 is the Pulse summary, which
+	// sits past the numbered views.
 	if r := event.Rune(); r >= '1' && r <= '9' {
 		a.switchView(int(r - '1'))
+		return nil
+	}
+	if event.Rune() == '0' {
+		a.gotoPulse()
 		return nil
 	}
 
@@ -234,9 +242,9 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 
 func statusColor(status string) tcell.Color {
 	switch status {
-	case "Running", "Succeeded", "Completed", "Bound", "Normal":
+	case "Running", "Succeeded", "Completed", "Bound", "Normal", "OK":
 		return tcell.ColorGreen
-	case "Pending", "ContainerCreating", "Terminating":
+	case "Pending", "ContainerCreating", "Terminating", "WARN":
 		return tcell.ColorYellow
 	case "":
 		return tcell.ColorWhite

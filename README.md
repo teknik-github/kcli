@@ -17,7 +17,8 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 
 ## Features
 
-- **14 resource views**: Pods, Deployments, DaemonSets, Services, Nodes, StatefulSets, ReplicaSets, PVCs, Ingresses, Jobs, CronJobs, ConfigMaps, Secrets, Events — plus a built-in **Port-Forward** view.
+- **14 resource views**: Pods, Deployments, DaemonSets, Services, Nodes, StatefulSets, ReplicaSets, PVCs, Ingresses, Jobs, CronJobs, ConfigMaps, Secrets, Events — plus a built-in **Port-Forward** view and a **Pulse** health summary.
+- **Pulse** (`0`, or `:pulse`): one-screen cluster health — per kind, how many objects exist, how many are healthy, how many are not, and why (`3 pending, 1 crashloopbackoff`). `Enter` on a row opens that kind's view. Pairs well with a split pane as a permanent monitor.
 - **Command-jump** (`:`): jump to any view by name or short alias (`:svc`, `:cj`, `:ev`, …).
 - **Generic / CRD view**: `:` any resource the cluster knows — CustomResourceDefinitions and built-ins without a dedicated view — resolved through discovery (kubectl-style short names) and listed read-only (name/age + YAML detail).
 - **Live updates** via shared informers: changes appear as they happen (watch-driven), and warm listers read from the in-memory cache instead of re-Listing the API each tick. A resource that can't be watched falls back to polling automatically.
@@ -147,6 +148,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | Key                 | Action                                                          |
 |---------------------|-----------------------------------------------------------------|
 | `1`–`9`             | Jump directly to the Nth view (first nine)                      |
+| `0`                 | Pulse — cluster health summary (`Enter` opens the kind)         |
 | `:`                 | Command-jump by name/alias — any view, plus CRDs & any GVR      |
 | `Tab` / `Shift-Tab` | Cycle to the next / previous view                               |
 | `t` / `w`           | New tab (clones current view) / close tab                       |
@@ -203,6 +205,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 ### Feature notes
 
 - **Command-jump** (`:`): type a resource name or short alias (`svc`, `deploy`, `cj`, `ev`, `pf`, …). Registered views switch instantly; anything else is resolved against the cluster's discovery info and opened as a generic view — this is how CRDs and any other GVR are reached. Short names resolve the same way kubectl does.
+- **Pulse** (`0`): a summary row per kind — TOTAL / OK / WARN / HEALTH / DETAIL. Health comes from whatever signal the kind has: its status column (Pods, PVCs, Nodes, Events) or its `n/m` READY / COMPLETIONS column (Deployments, StatefulSets, DaemonSets, Jobs); kinds with neither (Services, Ingresses) just report a count. DETAIL names the top three problems with counts. A kind that fails to list shows `ERR` in its own row rather than blanking the screen. It respects the current namespace and reuses the other views' fetchers, so it needs no extra listers.
 - **Dynamic / CRD view**: read-only. Generic NAMESPACE/NAME/AGE columns with full YAML detail on `Enter`. `Tab`, another `:`, or `q` leaves it (it is not in the numbered tab bar).
 - **Split view** (`|`, `-`, `\`): a layout over the tabs, not a second kind of session — each pane shows one tab. `|` on a single tab clones it first, so one key gets you two panes. The focused pane is the live one (accent border); the other is greyed and read-only until you `\` into it, and both are reloaded on the same refresh tick. Every other key (filter, sort, actions, view switch) applies to the focused pane only. Closing a tab (`w`) down to one unsplits automatically.
 - **Logs**: follows the last 500 lines by default. Press `p` to switch to the **previous** container instance's logs (useful for `CrashLoopBackOff`), and `/` to **grep** the buffer (filters in place, keeps following).
@@ -241,6 +244,7 @@ portforward.go   port-forward (SPDY)
 
 ```
 registry.go      ★ single source of truth: the list of viewDefs
+pulse.go         cluster health summary (reuses every view's Fetch)
 app.go           App (widget tree + state), refresh loop (loadCurrentView), header/tabs, logo
 views.go         generic filter & sort (cellLess), resolveView (:jump), humanAge
 pods.go          drawTable + key handler (onTableKey)
