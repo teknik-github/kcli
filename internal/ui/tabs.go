@@ -197,7 +197,7 @@ func (a *App) drawTabbar() {
 		label := fmt.Sprintf(" %d:%s ", i+1, a.tabTitle(i))
 		switch {
 		case i == a.activeTab:
-			fmt.Fprintf(&b, "[black:%s:b]%s[-:-:-] ", a.accent, label)
+			fmt.Fprintf(&b, "[%s:%s:b]%s[-:-:-] ", a.accentTextTag(), a.accent, label)
 		case onScreen[i]: // also on screen, just not focused
 			fmt.Fprintf(&b, "[%s::u]%s[-:-:-] ", a.accent, label)
 		default:

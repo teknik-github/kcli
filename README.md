@@ -131,6 +131,8 @@ aliases:                   # custom :jump aliases -> resource name
 
 Custom aliases are expanded before the built-in resolution, so `:p` → Pods, and any name the cluster knows (including CRDs) still works.
 
+Wherever text is drawn *on* the accent — the cursor row and the active tab labels — the text colour is picked from the accent's brightness, black over a light one and white over a dark one, so both a bright `aqua` and a dark `navy` stay readable.
+
 ---
 
 ## Usage

@@ -135,8 +135,11 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 		SetBorders(false).
 		SetSelectable(true, false).
 		SetFixed(1, 0)
+	// The cursor row is text *on* the accent, so its colour follows the accent's
+	// brightness — white on the default aqua is nearly unreadable.
+	selBG := accentColor(a.accent)
 	a.table.SetSelectedStyle(tcell.StyleDefault.
-		Background(accentColor(a.accent)).Foreground(tcell.ColorWhite))
+		Background(selBG).Foreground(contrastText(selBG)).Bold(true))
 
 	// Parked split panes are never focused, so they carry no cursor — their role
 	// is fixed to these widgets, which is what lets panes swap position without
@@ -416,6 +419,31 @@ func accentColor(name string) tcell.Color {
 	return tcell.ColorDarkCyan
 }
 
+// contrastText picks the text colour to lay over a filled accent background.
+// The default accent (aqua) is bright enough that white text on it is barely
+// legible, and a dark accent has the same problem with black — so choose by
+// perceived brightness instead of hardcoding either.
+func contrastText(bg tcell.Color) tcell.Color {
+	r, g, b := bg.RGB()
+	if r < 0 { // unknown/default colour: assume a dark terminal background
+		return tcell.ColorWhite
+	}
+	// Rec. 601 luma, the usual cheap stand-in for perceived brightness.
+	if (299*r+587*g+114*b)/1000 > 140 {
+		return tcell.ColorBlack
+	}
+	return tcell.ColorWhite
+}
+
+// accentTextTag is contrastText as a tview colour tag, for the accent-filled
+// labels in the tab bars.
+func (a *App) accentTextTag() string {
+	if contrastText(accentColor(a.accent)) == tcell.ColorBlack {
+		return "black"
+	}
+	return "white"
+}
+
 // drawTabs renders the resource tab bar with the active view highlighted.
 // Hidden (Local) views are omitted; when one is active it shows its own label.
 func (a *App) drawTabs() {
@@ -432,7 +460,7 @@ func (a *App) drawTabs() {
 			label = fmt.Sprintf(" %d:%s ", i+1, v.Title)
 		}
 		if i == a.viewIdx {
-			line += fmt.Sprintf("[black:%s:b]%s[-:-:-]", a.accent, label)
+			line += fmt.Sprintf("[%s:%s:b]%s[-:-:-]", a.accentTextTag(), a.accent, label)
 		} else {
 			line += fmt.Sprintf("[%s]%s[-]", a.accent, label)
 		}
@@ -440,9 +468,9 @@ func (a *App) drawTabs() {
 	}
 	switch {
 	case a.view().Local: // e.g. Port-Fwd: show it separately with its own hints
-		line += fmt.Sprintf("  [black:%s:b] %s [-:-:-]  [gray]enter log · d stop · q back[-]", a.accent, a.view().Title)
+		line += fmt.Sprintf("  [%s:%s:b] %s [-:-:-]  [gray]enter log · d stop · q back[-]", a.accentTextTag(), a.accent, a.view().Title)
 	case a.view().Hidden: // e.g. a Dynamic/CRD view reached via :jump
-		line += fmt.Sprintf("  [black:%s:b] %s [-:-:-]  [gray]:jump / tab to leave[-]", a.accent, a.view().Title)
+		line += fmt.Sprintf("  [%s:%s:b] %s [-:-:-]  [gray]:jump / tab to leave[-]", a.accentTextTag(), a.accent, a.view().Title)
 	}
 	a.tabs.SetText(line)
 }
