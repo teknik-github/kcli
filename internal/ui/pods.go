@@ -124,13 +124,19 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 		a.nextTab()
 		return nil
 	case '|':
-		a.toggleSplit(splitVert) // two panes side by side (press again to unsplit)
+		a.toggleSplit(splitVert) // panes side by side (again: one more, up to 4)
 		return nil
 	case '-':
-		a.toggleSplit(splitHoriz) // two panes stacked
+		a.toggleSplit(splitHoriz) // panes stacked (again: one more, up to 4)
+		return nil
+	case '+':
+		a.toggleSplit(splitGrid) // 2x2 quad view (again: unsplit)
+		return nil
+	case '_':
+		a.dropPane() // close the focused pane, keeping its tab open
 		return nil
 	case '\\':
-		a.swapPane() // move focus (and the live session) to the other pane
+		a.focusNextPane() // move focus (and the live session) to the next pane
 		return nil
 	case 'r':
 		go a.refresh()

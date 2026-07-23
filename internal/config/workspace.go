@@ -50,9 +50,9 @@ type Tab struct {
 type Workspace struct {
 	Tabs       []Tab `json:"tabs"`
 	ActiveTab  int   `json:"activeTab"`
-	Split      int   `json:"split,omitempty"`      // 0 off, 1 side by side, 2 stacked
+	Split      int   `json:"split,omitempty"`      // 0 off, 1 columns, 2 stacked, 3 grid
 	ActivePane int   `json:"activePane,omitempty"` // pane position holding the active tab
-	PaneTabs   []int `json:"paneTabs,omitempty"`   // tab index per pane position
+	PaneTabs   []int `json:"paneTabs,omitempty"`   // tab index per pane position (2..4 entries)
 }
 
 // workspaceFile mirrors the on-disk YAML: a map of name -> layout.

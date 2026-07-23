@@ -28,7 +28,7 @@ func (a *App) snapshotWorkspace() config.Workspace {
 	}
 	if a.split != splitOff { // pane bookkeeping is meaningless (and stale) unsplit
 		ws.ActivePane = a.activePane
-		ws.PaneTabs = []int{a.paneTabs[0], a.paneTabs[1]}
+		ws.PaneTabs = append([]int(nil), a.paneTabs[:a.paneCount]...)
 	}
 	for _, t := range a.tabList {
 		st := config.Tab{
@@ -70,16 +70,26 @@ func (a *App) applyWorkspace(ws config.Workspace) bool {
 		a.activeTab = 0
 	}
 
-	// Restore the split only if it still describes two distinct, existing tabs.
-	a.split, a.activePane, a.paneTabs = splitOff, 0, [2]int{0, 0}
-	if ws.Split != splitOff && len(tabs) > 1 && len(ws.PaneTabs) == 2 {
-		p0, p1 := ws.PaneTabs[0], ws.PaneTabs[1]
-		valid := func(i int) bool { return i >= 0 && i < len(tabs) }
-		if valid(p0) && valid(p1) && p0 != p1 {
+	// Restore the split only if it still describes 2..maxPanes distinct, existing
+	// tabs in a known arrangement.
+	a.split, a.activePane, a.paneCount, a.paneTabs = splitOff, 0, 1, [maxPanes]int{}
+	if ws.Split > splitOff && ws.Split <= splitGrid && len(ws.PaneTabs) >= 2 &&
+		len(ws.PaneTabs) <= maxPanes && len(ws.PaneTabs) <= len(tabs) {
+		seen := map[int]bool{}
+		ok := true
+		for _, i := range ws.PaneTabs {
+			if i < 0 || i >= len(tabs) || seen[i] {
+				ok = false
+				break
+			}
+			seen[i] = true
+		}
+		if ok {
 			a.split = ws.Split
-			a.paneTabs = [2]int{p0, p1}
+			a.paneCount = len(ws.PaneTabs)
+			copy(a.paneTabs[:], ws.PaneTabs)
 			a.activePane = ws.ActivePane
-			if a.activePane != 0 && a.activePane != 1 {
+			if a.activePane < 0 || a.activePane >= a.paneCount {
 				a.activePane = 0
 			}
 		}
@@ -160,7 +170,7 @@ func (a *App) repaintWorkspace() {
 	a.drawTabs()
 	a.drawHeader()
 	a.drawTable()
-	a.drawSplitPane()
+	a.drawSplitPanes()
 	go a.refresh()
 }
 

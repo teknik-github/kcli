@@ -97,7 +97,7 @@ func (a *App) loadTab(i int) {
 	a.drawTabs()
 	a.drawHeader()
 	a.drawTable()
-	a.drawSplitPane()
+	a.drawSplitPanes()
 	if t.selRow > 0 {
 		a.table.Select(t.selRow, 0)
 	}
@@ -107,6 +107,13 @@ func (a *App) loadTab(i int) {
 // newTab opens a fresh tab cloning the current view and namespace (so it starts
 // on something useful) but with its own filter/sort/selection/marks.
 func (a *App) newTab() {
+	a.loadTab(a.cloneTab())
+}
+
+// cloneTab appends a tab cloning the current session and returns its index,
+// without activating it — that is what lets a new split pane be filled without
+// stealing the focus mid-layout.
+func (a *App) cloneTab() int {
 	a.saveTab()
 	nt := &tabState{
 		viewIdx:       a.viewIdx,
@@ -121,7 +128,7 @@ func (a *App) newTab() {
 		nt.dynValid = true
 	}
 	a.tabList = append(a.tabList, nt)
-	a.loadTab(len(a.tabList) - 1)
+	return len(a.tabList) - 1
 }
 
 // closeTab drops the active tab, keeping at least one open.
@@ -183,7 +190,7 @@ func (a *App) drawTabbar() {
 	}
 	a.flex.ResizeItem(a.tabbar, 1, 0)
 
-	_, partner, split := a.splitPaneTab() // the tab sharing the screen, if any
+	onScreen := a.paneTabSet() // the tabs sharing the screen, if any
 
 	var b strings.Builder
 	for i := range a.tabList {
@@ -191,7 +198,7 @@ func (a *App) drawTabbar() {
 		switch {
 		case i == a.activeTab:
 			fmt.Fprintf(&b, "[black:%s:b]%s[-:-:-] ", a.accent, label)
-		case split && i == partner: // also on screen, just not focused
+		case onScreen[i]: // also on screen, just not focused
 			fmt.Fprintf(&b, "[%s::u]%s[-:-:-] ", a.accent, label)
 		default:
 			fmt.Fprintf(&b, "[%s]%s[-] ", a.accent, label)

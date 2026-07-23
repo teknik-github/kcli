@@ -9,29 +9,52 @@ import (
 	"github.com/rivo/tview"
 )
 
-// grayPane borders (and labels) the pane that is not focused.
+// grayPane borders (and labels) the panes that are not focused.
 var grayPane = tcell.ColorGray
 
-// Split modes: two tabs on screen at once, side by side or stacked.
+// Split modes: several tabs on screen at once, as columns, stacked rows, or a
+// grid filled two per row (2x2 at four panes).
 const (
 	splitOff = iota
 	splitVert
 	splitHoriz
+	splitGrid
 )
+
+// maxPanes is the ceiling on panes shown at once. Four is where a table still
+// has enough width/height to be readable on a normal terminal.
+const maxPanes = 4
 
 // Split is a layout over the tab list, not a second session model: each pane
 // shows one tab, and the *live* session (the App's mutable fields) is always the
 // one in the focused pane.
 //
-// The trick that keeps this cheap: a.table always renders the live tab, and
-// a.table2 always renders the parked one. Focusing the other pane does not move
-// state between widgets — it swaps their positions inside the body flex, so the
-// tab under the cursor stays put on screen while a.table remains "the live
-// table" for every existing read (selectedRow, drawTable, modals refocusing it).
+// The trick that keeps this cheap: a.table always renders the live tab, and the
+// a.parked tables render the others. Focusing another pane does not move state
+// between widgets — it swaps their positions inside the body flex, so the tab
+// under the cursor stays put on screen while a.table remains "the live table"
+// for every existing read (selectedRow, drawTable, modals refocusing it).
 //
-// rebuildBody lays the panes out. paneTabs[p] is the tab shown at position p
-// (0 = left/top, 1 = right/bottom); activePane is the position holding the live
-// tab, i.e. where a.table is placed.
+// paneTabs[p] is the tab shown at position p (0 = leftmost/topmost, filling in
+// reading order); paneCount is how many positions exist; activePane is the
+// position holding the live tab, i.e. where a.table is placed.
+
+// assignPaneTables maps each on-screen position to its widget: the live table at
+// activePane, the parked tables in order everywhere else. Positions own widgets,
+// tabs do not — that is what lets the focus move without any state moving.
+func (a *App) assignPaneTables() {
+	k := 0
+	for p := 0; p < a.paneCount && p < maxPanes; p++ {
+		if p == a.activePane {
+			a.paneTable[p] = a.table
+			continue
+		}
+		a.paneTable[p] = a.parked[k]
+		k++
+	}
+}
+
+// rebuildBody lays the panes out for the current mode and pane count.
 func (a *App) rebuildBody() {
 	a.body.Clear()
 	if a.split == splitOff {
@@ -40,118 +63,252 @@ func (a *App) rebuildBody() {
 		a.tv.SetFocus(a.table)
 		return
 	}
-	dir := tview.FlexColumn
-	if a.split == splitHoriz {
-		dir = tview.FlexRow
-	}
-	a.body.SetDirection(dir)
-	for p := 0; p < 2; p++ {
-		tbl := a.table2
-		if p == a.activePane {
-			tbl = a.table
+	a.assignPaneTables()
+
+	if a.split == splitGrid {
+		// Two per row, so four panes read as a quadrant and three leave the last
+		// one full width.
+		a.body.SetDirection(tview.FlexRow)
+		for p := 0; p < a.paneCount; p += 2 {
+			row := tview.NewFlex().SetDirection(tview.FlexColumn)
+			row.AddItem(a.paneTable[p], 0, 1, false)
+			if p+1 < a.paneCount {
+				row.AddItem(a.paneTable[p+1], 0, 1, false)
+			}
+			a.body.AddItem(row, 0, 1, false)
 		}
-		a.body.AddItem(tbl, 0, 1, p == a.activePane)
+	} else {
+		dir := tview.FlexColumn
+		if a.split == splitHoriz {
+			dir = tview.FlexRow
+		}
+		a.body.SetDirection(dir)
+		for p := 0; p < a.paneCount; p++ {
+			a.body.AddItem(a.paneTable[p], 0, 1, p == a.activePane)
+		}
 	}
 	a.drawPaneTitles()
 	a.tv.SetFocus(a.table) // keys always drive the live pane
 }
 
-// toggleSplit turns the split on in the given mode, switches orientation, or
-// turns it off when the same mode is pressed again. Splitting with a single tab
-// open clones it, so `|` alone is enough to get two panes.
+// toggleSplit applies a split arrangement. From unsplit, `|` and `-` open two
+// panes and the grid key opens a full quad; pressing the same key again grows
+// the split by one pane and folds it away once it is full. Splitting with fewer
+// tabs than panes clones the current session to fill them.
 func (a *App) toggleSplit(mode int) {
-	if a.split == mode {
-		a.split = splitOff
-		a.rebuildBody()
-		a.drawTable()
-		return
-	}
-	if a.split == splitOff {
-		if len(a.tabList) < 2 {
-			a.newTab() // clone the current session into a second tab to fill pane 2
+	switch {
+	case a.split == mode: // same arrangement again: grow it, or fold it away
+		if mode == splitGrid || !a.addPane() {
+			a.unsplit()
+			return
+		}
+	case a.split == splitOff: // open it
+		want := 2
+		if mode == splitGrid {
+			want = maxPanes
 		}
 		a.activePane = 0
+		a.paneCount = 1
 		a.paneTabs[0] = a.activeTab
-		a.paneTabs[1] = a.otherTab()
+		a.split = mode // addPane reads the live split when picking tabs
+		for a.paneCount < want && a.addPane() {
+		}
 	}
 	a.split = mode
 	a.fixPanes()
 	a.rebuildBody()
 	a.drawTable()
 	a.drawTabbar()
-	a.drawSplitPane()
-	go a.refresh() // pull fresh rows for the pane that just appeared
+	a.drawSplitPanes()
+	go a.refresh() // pull fresh rows for the panes that just appeared
 }
 
-// otherTab picks a tab to put in the second pane: the one after the active tab,
-// wrapping around.
-func (a *App) otherTab() int {
-	if len(a.tabList) < 2 {
-		return a.activeTab
+// addPane puts one more tab on screen, cloning the current session when every
+// open tab is already visible. Reports whether a pane was added.
+func (a *App) addPane() bool {
+	if a.paneCount >= maxPanes {
+		return false
 	}
-	return (a.activeTab + 1) % len(a.tabList)
+	i := a.freeTab()
+	if i < 0 {
+		i = a.cloneTab()
+	}
+	a.paneTabs[a.paneCount] = i
+	a.paneCount++
+	return true
 }
 
-// swapPane moves the focus (and with it the live session) to the other pane.
-func (a *App) swapPane() {
+// dropPane removes the focused pane, unsplitting at the last two. The tab it
+// showed stays open — this closes the pane, not the session (that is `w`).
+func (a *App) dropPane() {
 	if a.split == splitOff {
 		return
 	}
-	target := a.paneTabs[1-a.activePane]
-	if target < 0 || target >= len(a.tabList) || target == a.activeTab {
+	if a.paneCount <= 2 {
+		a.unsplit()
 		return
 	}
+	p := a.activePane
+	copy(a.paneTabs[p:], a.paneTabs[p+1:a.paneCount])
+	a.paneCount--
+	if p >= a.paneCount {
+		p = a.paneCount - 1
+	}
 	a.saveTab()
-	a.activePane = 1 - a.activePane
-	a.loadTab(target)
-	// The live table widget has to move to the pane that now owns the focus,
-	// otherwise the two tabs visibly trade places instead of the cursor moving.
-	a.rebuildBody()
+	a.activePane = p
+	a.loadTab(a.paneTabs[p]) // the pane that took its place owns the focus now
+	a.rebuildBody()          // the layout lost a slot, so it always needs rebuilding
 	a.drawPaneTitles()
 }
 
+// unsplit collapses back to the single full-screen table.
+func (a *App) unsplit() {
+	a.split = splitOff
+	a.paneCount = 1
+	a.activePane = 0
+	a.rebuildBody()
+	a.drawTable()
+	a.drawTabbar() // the on-screen marks in the workspace strip are gone now
+}
+
+// focusNextPane moves the focus — and with it the live session — to the next
+// pane, wrapping around.
+func (a *App) focusNextPane() {
+	if a.split == splitOff {
+		return
+	}
+	for k := 1; k < a.paneCount; k++ {
+		p := (a.activePane + k) % a.paneCount
+		t := a.paneTabs[p]
+		if t < 0 || t >= len(a.tabList) || t == a.activeTab {
+			continue
+		}
+		a.saveTab()
+		a.activePane = p
+		a.loadTab(t)
+		// The live table widget has to move to the pane that now owns the focus,
+		// otherwise the tabs visibly trade places instead of the cursor moving.
+		a.rebuildBody()
+		a.drawPaneTitles()
+		return
+	}
+}
+
 // fixPanes reconciles the pane assignment after the tab list or the active tab
-// changed. It reports whether the pane *order* moved, which is the only case
-// that needs the body flex rebuilt.
+// changed: every position ends up on a distinct, existing tab, with the live one
+// at activePane. It reports whether the pane *order* moved, which is the only
+// case that needs the body flex rebuilt.
 func (a *App) fixPanes() bool {
 	if a.split == splitOff {
 		return false
 	}
 	if len(a.tabList) < 2 { // nothing left to show beside it
 		a.split = splitOff
+		a.paneCount = 1
+		a.activePane = 0
 		return true
 	}
 	moved := false
-	// Activating the tab that already sits in the other pane moves the focus
-	// there instead of dragging its content across.
-	if a.activeTab == a.paneTabs[1-a.activePane] {
-		a.activePane = 1 - a.activePane
+	if a.paneCount > len(a.tabList) { // fewer sessions than panes: shed the extras
+		a.paneCount = len(a.tabList)
 		moved = true
+	}
+	if a.paneCount < 2 {
+		a.paneCount = 2
+		moved = true
+	}
+	if a.activePane < 0 || a.activePane >= a.paneCount {
+		a.activePane = 0
+		moved = true
+	}
+	// Activating a tab that is already on screen moves the focus to its pane
+	// instead of dragging its content across.
+	if a.paneTabs[a.activePane] != a.activeTab {
+		if p := a.paneOf(a.activeTab); p >= 0 {
+			a.activePane = p
+			moved = true
+		}
 	}
 	a.paneTabs[a.activePane] = a.activeTab
 
-	other := a.paneTabs[1-a.activePane]
-	if other < 0 || other >= len(a.tabList) || other == a.activeTab {
-		for i := range a.tabList { // fall back to any other tab
-			if i != a.activeTab {
-				a.paneTabs[1-a.activePane] = i
-				break
-			}
+	used := map[int]bool{a.activeTab: true}
+	for p := 0; p < a.paneCount; p++ {
+		if p == a.activePane {
+			continue
 		}
+		i := a.paneTabs[p]
+		if i < 0 || i >= len(a.tabList) || used[i] {
+			i = a.freeTabExcept(used)
+		}
+		if i < 0 { // no tab left to fill this position
+			a.paneCount = p
+			moved = true
+			break
+		}
+		a.paneTabs[p] = i
+		used[i] = true
+	}
+	if a.activePane >= a.paneCount { // the shed positions took the live one with them
+		a.activePane = 0
+		a.paneTabs[0] = a.activeTab
+		moved = true
 	}
 	return moved
 }
 
-// splitPaneTab returns the parked tab currently shown in the other pane.
-func (a *App) splitPaneTab() (*tabState, int, bool) {
+// paneOf returns the position showing tab i, or -1 when it is off screen.
+func (a *App) paneOf(i int) int {
+	for p := 0; p < a.paneCount; p++ {
+		if a.paneTabs[p] == i {
+			return p
+		}
+	}
+	return -1
+}
+
+// freeTab returns a tab that is not on screen, or -1 when all of them are.
+func (a *App) freeTab() int {
+	used := map[int]bool{}
+	for p := 0; p < a.paneCount; p++ {
+		used[a.paneTabs[p]] = true
+	}
+	return a.freeTabExcept(used)
+}
+
+// freeTabExcept returns the first tab not in used, or -1.
+func (a *App) freeTabExcept(used map[int]bool) int {
+	for i := range a.tabList {
+		if !used[i] {
+			return i
+		}
+	}
+	return -1
+}
+
+// paneTabSet reports which tabs are on screen in a parked pane.
+func (a *App) paneTabSet() map[int]bool {
+	on := map[int]bool{}
 	if a.split == splitOff {
-		return nil, -1, false
+		return on
 	}
-	i := a.paneTabs[1-a.activePane]
+	for p := 0; p < a.paneCount; p++ {
+		if p != a.activePane {
+			on[a.paneTabs[p]] = true
+		}
+	}
+	return on
+}
+
+// paneTab returns the parked tab shown at position p.
+func (a *App) paneTab(p int) (*tabState, bool) {
+	if a.split == splitOff || p < 0 || p >= a.paneCount || p == a.activePane {
+		return nil, false
+	}
+	i := a.paneTabs[p]
 	if i < 0 || i >= len(a.tabList) || i == a.activeTab {
-		return nil, -1, false
+		return nil, false
 	}
-	return a.tabList[i], i, true
+	return a.tabList[i], true
 }
 
 // tabView resolves the viewDef a parked tab points at. A tab parked on a CRD
@@ -170,10 +327,20 @@ func (a *App) tabView(t *tabState) (*viewDef, bool) {
 	return resourceViews[t.viewIdx], true
 }
 
-// drawSplitPane repaints the parked pane from its tabState — same filter, sort
-// and marks it would have if it were live.
-func (a *App) drawSplitPane() {
-	t, i, ok := a.splitPaneTab()
+// drawSplitPanes repaints every parked pane from its tabState — same filter,
+// sort and marks it would have if it were live.
+func (a *App) drawSplitPanes() {
+	if a.split == splitOff {
+		return
+	}
+	for p := 0; p < a.paneCount; p++ {
+		a.drawPane(p)
+	}
+}
+
+// drawPane repaints one parked pane.
+func (a *App) drawPane(p int) {
+	t, ok := a.paneTab(p)
 	if !ok {
 		return
 	}
@@ -181,20 +348,34 @@ func (a *App) drawSplitPane() {
 	if !ok {
 		return
 	}
-	rows := filterSortRows(t.rows, t.filter, t.sortCol, t.sortDesc)
-	drawRows(a.table2, view, rows, t.marked)
-	if t.selRow > 0 && t.selRow <= len(rows) {
-		a.table2.Select(t.selRow, 0)
+	tbl := a.paneTable[p]
+	if tbl == nil {
+		return
 	}
-	a.paneTitle(a.table2, i, false)
+	rows := filterSortRows(t.rows, t.filter, t.sortCol, t.sortDesc)
+	drawRows(tbl, view, rows, t.marked)
+	if t.selRow > 0 && t.selRow <= len(rows) {
+		tbl.Select(t.selRow, 0)
+	}
+	a.paneTitle(tbl, a.paneTabs[p], false)
 }
 
-// loadSplitPane fetches the parked pane's rows on the same cadence as the live
-// view. It follows the usual rules: view/namespace/client captured here on the
-// UI goroutine, the fetch on a background one, the store back inside
-// QueueUpdateDraw and dropped if the pane moved meanwhile.
-func (a *App) loadSplitPane() {
-	t, i, ok := a.splitPaneTab()
+// loadSplitPanes fetches every parked pane's rows on the same cadence as the
+// live view.
+func (a *App) loadSplitPanes() {
+	if a.split == splitOff {
+		return
+	}
+	for p := 0; p < a.paneCount; p++ {
+		a.loadPane(p)
+	}
+}
+
+// loadPane fetches one parked pane. It follows the usual rules: view/namespace/
+// client captured here on the UI goroutine, the fetch on a background one, the
+// store back inside QueueUpdateDraw and dropped if the pane moved meanwhile.
+func (a *App) loadPane(p int) {
+	t, ok := a.paneTab(p)
 	if !ok {
 		return
 	}
@@ -204,7 +385,7 @@ func (a *App) loadSplitPane() {
 	}
 	if view.Local { // Port-Fwd: rows come from App state, never the cluster
 		t.rows = a.forwardRows()
-		a.drawSplitPane()
+		a.drawPane(p)
 		return
 	}
 	ns := t.namespace
@@ -223,25 +404,27 @@ func (a *App) loadSplitPane() {
 			if err != nil || a.clientGen != gen {
 				return // stale client, or a failure the live pane will surface too
 			}
-			if _, cur, ok := a.splitPaneTab(); !ok || cur != i {
+			if cur, ok := a.paneTab(p); !ok || cur != t {
 				return // the pane now shows something else
 			}
 			t.rows = rows
-			a.drawSplitPane()
+			a.drawPane(p)
 		})
 	}()
 }
 
-// drawPaneTitles borders both panes with their tab labels; the live pane is
-// accented, the parked one grey, so it is obvious which one the keys drive.
+// drawPaneTitles borders every pane with its tab label; the live pane is
+// accented, the parked ones grey, so it is obvious which one the keys drive.
 func (a *App) drawPaneTitles() {
 	if a.split == splitOff {
 		a.table.SetBorder(false)
 		return
 	}
-	a.paneTitle(a.table, a.activeTab, true)
-	if _, i, ok := a.splitPaneTab(); ok {
-		a.paneTitle(a.table2, i, false)
+	a.assignPaneTables()
+	for p := 0; p < a.paneCount; p++ {
+		if tbl := a.paneTable[p]; tbl != nil {
+			a.paneTitle(tbl, a.paneTabs[p], p == a.activePane)
+		}
 	}
 }
 

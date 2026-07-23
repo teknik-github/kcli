@@ -29,9 +29,9 @@ type App struct {
 	header *tview.TextView
 	tabbar *tview.TextView // workspace (multi-tab) strip; hidden when only one tab
 	tabs   *tview.TextView
-	body   *tview.Flex // holds the table, or both panes while split
+	body   *tview.Flex // holds the table, or every pane while split
 	table  *tview.Table
-	table2 *tview.Table // parked tab's pane, only on screen while split
+	parked [maxPanes - 1]*tview.Table // parked tabs' panes, only on screen while split
 	footer *tview.TextView
 
 	// Browser-style tabs: each holds an independent view session (resource,
@@ -41,13 +41,16 @@ type App struct {
 	tabList   []*tabState
 	activeTab int
 
-	// Split view (see split.go): two tabs on screen at once. a.table always holds
-	// the live tab and a.table2 the parked one; activePane is the position
-	// (0 = left/top, 1 = right/bottom) a.table is laid out at, and paneTabs maps
-	// each position to the tab it shows.
-	split      int // splitOff / splitVert / splitHoriz
+	// Split view (see split.go): up to maxPanes tabs on screen at once. a.table
+	// always holds the live tab and the a.parked tables the others; paneCount is
+	// how many positions are on screen, paneTabs maps each position to the tab it
+	// shows, activePane is the position a.table is laid out at, and paneTable
+	// maps positions to widgets.
+	split      int // splitOff / splitVert / splitHoriz / splitGrid
 	activePane int
-	paneTabs   [2]int
+	paneCount  int
+	paneTabs   [maxPanes]int
+	paneTable  [maxPanes]*tview.Table
 
 	viewIdx     int    // index into resourceViews
 	prevViewIdx int    // view to return to when leaving a hidden (Local) view
@@ -135,13 +138,15 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 	a.table.SetSelectedStyle(tcell.StyleDefault.
 		Background(accentColor(a.accent)).Foreground(tcell.ColorWhite))
 
-	// The parked split pane is never focused, so it carries no cursor — its
-	// role is fixed to this widget, which is what lets the panes swap position
-	// without moving any state (see split.go).
-	a.table2 = tview.NewTable().
-		SetBorders(false).
-		SetSelectable(false, false).
-		SetFixed(1, 0)
+	// Parked split panes are never focused, so they carry no cursor — their role
+	// is fixed to these widgets, which is what lets panes swap position without
+	// moving any state (see split.go).
+	for i := range a.parked {
+		a.parked[i] = tview.NewTable().
+			SetBorders(false).
+			SetSelectable(false, false).
+			SetFixed(1, 0)
+	}
 
 	// Top band, k9s-style: the info block grows to fill the left while the logo
 	// keeps its natural width pinned to the right. The band is as tall as the
@@ -150,7 +155,7 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 		AddItem(a.header, 0, 1, false).
 		AddItem(a.logo, utf8.RuneCountInString(logoLines[0]), 0, false)
 
-	// body holds the table; rebuildBody swaps in the two-pane layout when split.
+	// body holds the table; rebuildBody swaps in the multi-pane layout when split.
 	a.body = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.table, 0, 1, true)
 
@@ -163,8 +168,9 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 		AddItem(a.body, 0, 1, true).
 		AddItem(a.footer, 1, 0, false)
 
-	// Start with a single tab holding the initial session.
+	// Start with a single tab holding the initial session, unsplit.
 	a.tabList = []*tabState{{sortCol: -1, namespace: a.namespace}}
+	a.paneCount = 1
 
 	a.pages = tview.NewPages().AddPage("main", a.flex, true, true)
 
@@ -284,7 +290,7 @@ func (a *App) loadCurrentView() {
 	cl := a.client
 	view := resourceViews[idx]
 
-	a.loadSplitPane() // the parked pane (if split) reloads on the same cadence
+	a.loadSplitPanes() // the parked panes (if split) reload on the same cadence
 
 	// Local views (port-forwards) are backed by App state, not the cluster.
 	if view.Local {
