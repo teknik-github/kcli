@@ -94,7 +94,7 @@ gofmt -w internal/ main.go   # format
 
 kcli resolves the cluster connection in this order:
 
-1. The **`$KUBECONFIG`** environment variable
+1. The **`$KUBECONFIG`** environment variable — including a colon-separated list of files, merged in precedence order the way `kubectl` does it
 2. **`~/.kube/config`**
 3. **In-cluster config** (when running as a Pod)
 

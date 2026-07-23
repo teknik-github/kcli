@@ -11,7 +11,9 @@ import (
 )
 
 func main() {
-	client, err := k8s.NewClient(os.Getenv("KUBECONFIG"))
+	// No explicit path: client-go resolves $KUBECONFIG (merging every file it
+	// lists), then ~/.kube/config, then in-cluster config.
+	client, err := k8s.NewClient("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kcli: failed to connect to cluster: %v\n", err)
 		os.Exit(1)

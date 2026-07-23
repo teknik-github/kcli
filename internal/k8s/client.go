@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,7 +28,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
 	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
 	"sigs.k8s.io/yaml"
 )
@@ -55,14 +53,10 @@ type Client struct {
 	onChange   func()
 }
 
-// NewClient builds a Client from a kubeconfig path. An empty path falls back to
-// the standard resolution: $KUBECONFIG, then ~/.kube/config, then in-cluster.
+// NewClient builds a Client from an explicit kubeconfig path. An empty path —
+// the normal case — leaves the resolution to client-go's default rules:
+// $KUBECONFIG (a list, merged in order), then ~/.kube/config, then in-cluster.
 func NewClient(kubeconfig string) (*Client, error) {
-	if kubeconfig == "" {
-		if home := homedir.HomeDir(); home != "" {
-			kubeconfig = filepath.Join(home, ".kube", "config")
-		}
-	}
 	c := &Client{kubeconfig: kubeconfig}
 	if err := c.connect(""); err != nil {
 		return nil, err
@@ -70,7 +64,12 @@ func NewClient(kubeconfig string) (*Client, error) {
 	return c, nil
 }
 
-// loadingRules returns the kubeconfig loading rules for this client's path.
+// loadingRules returns the kubeconfig loading rules. The default rules already
+// implement kubectl's resolution — $KUBECONFIG (colon-separated, every file
+// merged in precedence order) falling back to ~/.kube/config — so ExplicitPath
+// is only set for a path this client was constructed with, which overrides the
+// lot. Setting it from $KUBECONFIG would be wrong: a multi-file value would be
+// taken as one literal filename and fail to load.
 func (c *Client) loadingRules() *clientcmd.ClientConfigLoadingRules {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if c.kubeconfig != "" {
