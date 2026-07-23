@@ -727,16 +727,20 @@ func (a *App) showCommandDialog() {
 	input.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
-			q := input.GetText()
+			q := strings.TrimSpace(input.GetText())
 			a.closeModal("cmd")
-			if strings.TrimSpace(q) != "" {
+			switch verb, rest, _ := strings.Cut(q, " "); {
+			case q == "":
+			case strings.EqualFold(verb, "ws"), strings.EqualFold(verb, "workspace"):
+				a.workspaceCommand(rest) // ":ws save|load|rm|list [name]"
+			default:
 				a.jumpToView(q)
 			}
 		case tcell.KeyEscape:
 			a.closeModal("cmd")
 		}
 	})
-	input.SetBorder(true).SetTitle(" :resource  (po svc deploy cj cm sec ev pf …) ")
+	input.SetBorder(true).SetTitle(" :resource  (po svc deploy cj cm sec ev pf · ws save|load) ")
 	a.openModal("cmd", input, 52, 3)
 }
 

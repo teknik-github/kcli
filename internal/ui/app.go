@@ -168,6 +168,11 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 
 	a.pages = tview.NewPages().AddPage("main", a.flex, true, true)
 
+	// A saved "default" workspace replaces that single tab with the user's own
+	// layout. Safe here: it only touches widgets directly (no QueueUpdateDraw,
+	// which would deadlock before Run).
+	a.restoreStartupWorkspace()
+
 	a.table.SetInputCapture(a.onTableKey)
 	a.tv.SetRoot(a.pages, true).SetFocus(a.table)
 

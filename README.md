@@ -33,6 +33,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Safe secrets**: values are always masked (`<redacted: N bytes>`) when describing; plain-text reveal (`v`) is a separate, confirmed action.
 - **Tabs** (`t` new, `w` close, `[`/`]` switch, `Alt`+`N` jump): keep several independent view sessions open — each remembers its own resource, namespace, filter, sort, and selection — for side-by-side monitoring.
 - **Split view** (`|` side by side, `-` stacked, `\` switch pane): show two tabs at once — e.g. Pods beside Deployments, or the same resource in two namespaces. Both panes refresh live; keys drive the focused one.
+- **Workspaces** (`:ws save|load|rm|list [name]`): persist the whole layout — which tabs are open, what each points at (including CRDs), their names, namespaces, filters and sorts, plus the split arrangement. A workspace saved as `default` is restored at startup; quitting always writes `last`, so a layout closed by accident comes back with `:ws load last`.
 - **Context switching** (`x`): switch cluster/context at runtime, no restart.
 - **Help overlay** (`?`): every key binding + the `:jump` aliases.
 - **Optional config file**: default namespace, refresh cadence, accent colour, and custom `:jump` aliases (`~/.config/kcli/config.yaml`).
@@ -102,6 +103,8 @@ The active context is shown in the header and starts as the kubeconfig's current
 ### Config file (optional)
 
 kcli reads an optional YAML config from `$KCLI_CONFIG`, else `$XDG_CONFIG_HOME/kcli/config.yaml`, else `~/.config/kcli/config.yaml`. A missing or malformed file is ignored (defaults apply) — it never blocks startup.
+
+Saved workspaces live in `workspaces.yaml` in that same directory. It is the one file kcli writes; the config file stays yours to edit.
 
 ### Corner GIF animation (optional)
 
@@ -207,6 +210,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 - **Command-jump** (`:`): type a resource name or short alias (`svc`, `deploy`, `cj`, `ev`, `pf`, …). Registered views switch instantly; anything else is resolved against the cluster's discovery info and opened as a generic view — this is how CRDs and any other GVR are reached. Short names resolve the same way kubectl does.
 - **Pulse** (`0`): a summary row per kind — TOTAL / OK / WARN / HEALTH / DETAIL. Health comes from whatever signal the kind has: its status column (Pods, PVCs, Nodes, Events) or its `n/m` READY / COMPLETIONS column (Deployments, StatefulSets, DaemonSets, Jobs); kinds with neither (Services, Ingresses) just report a count. DETAIL names the top three problems with counts. A kind that fails to list shows `ERR` in its own row rather than blanking the screen. It respects the current namespace and reuses the other views' fetchers, so it needs no extra listers.
 - **Dynamic / CRD view**: read-only. Generic NAMESPACE/NAME/AGE columns with full YAML detail on `Enter`. `Tab`, another `:`, or `q` leaves it (it is not in the numbered tab bar).
+- **Workspaces** (`:ws`): `:ws save [name]` snapshots the layout, `:ws load [name]` restores it, `:ws rm [name]` deletes one, `:ws list` (or a bare `:ws`) shows what is saved; the name defaults to `default`, which is also the one restored automatically at startup — saving under it is how you opt in. Quitting overwrites the `last` slot. Only the *shape* of a session is stored (resource, namespace, filter, sort, tab name, split); rows always reload from the cluster. A tab parked on a CRD stores its GVR, so it comes back without another discovery lookup. Tabs whose resource no longer exists are skipped, and a stored split is only restored if it still describes two existing tabs. The file is `workspaces.yaml`, beside `config.yaml`.
 - **Split view** (`|`, `-`, `\`): a layout over the tabs, not a second kind of session — each pane shows one tab. `|` on a single tab clones it first, so one key gets you two panes. The focused pane is the live one (accent border); the other is greyed and read-only until you `\` into it, and both are reloaded on the same refresh tick. Every other key (filter, sort, actions, view switch) applies to the focused pane only. Closing a tab (`w`) down to one unsplits automatically.
 - **Logs**: follows the last 500 lines by default. Press `p` to switch to the **previous** container instance's logs (useful for `CrashLoopBackOff`), and `/` to **grep** the buffer (filters in place, keeps following).
 - **Multi-pod tail** (`L`): one pane, one follow stream per pod, capped at 20 pods (the extras are dropped and the title says so, e.g. `tail: 20 of 29 pods`). Targets are the marked rows when any are marked, otherwise every row the filter leaves on screen — so `/nginx` then `L` tails a whole deployment. Each pod gets a coloured name prefix (`ns/name` when the tail spans namespaces); the pane's `/` grep matches the prefix as well as the line, so it can narrow back to a single pod. Follows the first regular container of each pod, like `kubectl logs` with no `-c`.
@@ -244,6 +248,7 @@ portforward.go   port-forward (SPDY)
 
 ```
 registry.go      ★ single source of truth: the list of viewDefs
+workspace.go     save/restore the tab + split layout (:ws)
 pulse.go         cluster health summary (reuses every view's Fetch)
 app.go           App (widget tree + state), refresh loop (loadCurrentView), header/tabs, logo
 views.go         generic filter & sort (cellLess), resolveView (:jump), humanAge

@@ -54,13 +54,38 @@ func (a *App) jumpDynamic(query string) {
 func (a *App) setDynamicView(gvr schema.GroupVersionResource, namespaced bool, kind string) {
 	a.dynGVR = gvr
 	a.dynNamespaced = namespaced
+	*resourceViews[a.dynIdx] = dynamicViewDef(gvr, namespaced, kind)
 
-	v := resourceViews[a.dynIdx]
-	v.Title = kind
-	v.ClusterScoped = !namespaced
-	if namespaced {
-		v.Columns = []string{"NAMESPACE", "NAME", "AGE"}
-	} else {
+	// switchView bails when the target index is already active, so re-jumping
+	// from one dynamic resource to another needs an explicit reload.
+	if a.viewIdx == a.dynIdx {
+		a.rows = nil
+		a.sortCol = -1
+		a.sortDesc = false
+		a.table.Clear()
+		a.drawTabs()
+		a.drawHeader()
+		go a.refresh()
+		return
+	}
+	a.switchView(a.dynIdx)
+}
+
+// dynamicViewDef builds a self-contained view for one GVR. It is a value, not a
+// write into the shared Dynamic slot, so a restored workspace can hand each
+// CRD tab its own copy (tabState.dynSlot) without them overwriting each other.
+// The Fetch closure captures the GVR by value for the same reason.
+func dynamicViewDef(gvr schema.GroupVersionResource, namespaced bool, kind string) viewDef {
+	v := viewDef{
+		ID:            "dynamic",
+		Title:         kind,
+		Columns:       []string{"NAMESPACE", "NAME", "AGE"},
+		StatusCol:     -1,
+		ClusterScoped: !namespaced,
+		Hidden:        true,
+		Dynamic:       true,
+	}
+	if !namespaced {
 		v.Columns = []string{"NAME", "AGE"}
 	}
 
@@ -80,18 +105,5 @@ func (a *App) setDynamicView(gvr schema.GroupVersionResource, namespaced bool, k
 		}
 		return rows, nil
 	}
-
-	// switchView bails when the target index is already active, so re-jumping
-	// from one dynamic resource to another needs an explicit reload.
-	if a.viewIdx == a.dynIdx {
-		a.rows = nil
-		a.sortCol = -1
-		a.sortDesc = false
-		a.table.Clear()
-		a.drawTabs()
-		a.drawHeader()
-		go a.refresh()
-		return
-	}
-	a.switchView(a.dynIdx)
+	return v
 }

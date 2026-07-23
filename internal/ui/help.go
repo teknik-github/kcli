@@ -27,6 +27,7 @@ func (a *App) showHelp() {
 		{"| / -", "split the screen (side by side / stacked); again = unsplit"},
 		{"\\", "move focus to the other split pane"},
 		{":", "command-jump to any resource by name/alias (incl. CRDs)"},
+		{":ws save|load", "save / restore the tab + split layout (\"default\" loads at startup)"},
 		{"/", "filter rows (any column)"},
 		{"esc", "clear the active filter"},
 		{". / ,", "cycle sort column / flip direction"},

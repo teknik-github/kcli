@@ -102,7 +102,7 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 		if a.view().Local {
 			a.backView() // in a hidden view (Port-Fwd), q returns to the previous view
 		} else {
-			a.tv.Stop()
+			a.quit() // snapshots the layout into the "last" workspace, then stops
 		}
 		return nil
 	case ' ':
