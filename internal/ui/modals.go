@@ -734,6 +734,8 @@ func (a *App) showCommandDialog() {
 			case q == "":
 			case strings.EqualFold(verb, "ws"), strings.EqualFold(verb, "workspace"):
 				a.workspaceCommand(rest) // ":ws save|load|rm|list [name]"
+			case strings.EqualFold(q, "update"), strings.EqualFold(q, "upgrade"):
+				a.updateCommand() // self-update via `go install …@latest`
 			default:
 				a.jumpToView(q)
 			}
@@ -741,7 +743,7 @@ func (a *App) showCommandDialog() {
 			a.closeModal("cmd")
 		}
 	})
-	input.SetBorder(true).SetTitle(" :resource  (po svc deploy cj cm sec ev pf · ws save|load) ")
+	input.SetBorder(true).SetTitle(" :resource  (po svc deploy cj cm sec ev pf · ws save|load · update) ")
 	a.openModal("cmd", input, 52, 3)
 }
 

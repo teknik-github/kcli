@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`kcli` — an interactive terminal UI (TUI) for managing Kubernetes, built with `tview`/`tcell` and the official `client-go`. A lightweight k9s-style browser: multi-resource views, live metrics, logs (with grep), exec, scale, edit, delete, rollout restart/undo, cordon/drain, reveal-secret, port-forward, HTTP benchmarking, runtime context switch, `:`-command-jump, and a generic dynamic view that reaches any GVR/CRD.
+`kcli` — an interactive terminal UI (TUI) for managing Kubernetes, built with `tview`/`tcell` and the official `client-go`. A lightweight k9s-style browser: multi-resource views, live metrics, logs (with grep), exec, scale, edit, delete, rollout restart/undo, cordon/drain, reveal-secret, port-forward, HTTP benchmarking, a startup update check with in-app self-update, runtime context switch, `:`-command-jump, and a generic dynamic view that reaches any GVR/CRD.
 
 ## Build & run
 
@@ -31,8 +31,9 @@ There is no permanent test suite. Two ways to verify changes:
 
 ## Architecture
 
-Four packages under `internal/`:
+Five packages under `internal/`:
 
+- **`internal/version`** — dependency-free build/version reporting. `Current()` prefers an `-ldflags` stamp, then the `go install module@tag` build info (`runtime/debug.ReadBuildInfo`), then `(devel)`. `Latest(ctx)` queries `https://proxy.golang.org/<module>/@latest`; `IsNewer` compares clean `vX.Y.Z` tags only (build metadata after `+` ignored, anything with a `-` prerelease/pseudo suffix rejected) so a local/pseudo build is never nagged. `main.go` handles `--version`; the UI runs `checkForUpdate` at startup (see below).
 - **`internal/config`** — optional user config (`$KCLI_CONFIG` → `$XDG_CONFIG_HOME/kcli/config.yaml` → `~/.config/kcli/config.yaml`). Best-effort: a missing/malformed file yields defaults, never a startup error. Supplies startup namespace, refresh cadence (`baseRefresh`), accent colour, and custom `:jump` aliases. `main.go` loads it and passes it to `NewApp`.
 - **`internal/k8s`** — all cluster access (`client-go`). `Client` wraps a typed `clientset`, an optional `*metricsv.Clientset` (best-effort), the `*rest.Config` (kept for streaming subresources), and a lazily-built cached `RESTMapper`/`dynamic.Interface` plus a shared informer cache. Each resource has a display struct (`Pod`, `Deployment`, …) flattened for the table by a `toX` helper, plus a lister that reads from the informer cache and sorts by `(namespace, name)`. `Describe`/`Delete`/`Scale`/`RolloutRestart`/`RolloutUndo` are `kind`-string dispatchers. `exec.go` and `portforward.go` hold the SPDY streaming subresources.
 
@@ -146,6 +147,12 @@ The split of responsibility is the point: **`internal/bench` is the engine and h
 - **Ingress** — no forward at all: `k8s.IngressTarget` returns the published LB address (falling back to the rule's host), the `Host` header to send, and whether TLS covers it. That path measures the ingress controller too, which is the whole point of benchmarking an Ingress. `Insecure` is set for https because cluster certs are routinely self-signed.
 
 `runBench` is a plain background goroutine following the usual rule — `cl := a.client` captured on the UI goroutine in `startBench` — and every status/progress write goes through `QueueUpdateDraw`, so `benchRun`'s fields need no locking. The engine's `progress` callback fires every 250ms and calls `redrawBench`, which repaints only when the Bench view is actually on screen.
+
+### Update check & self-update (`ui/update.go`)
+
+`Run()` spawns `checkForUpdate` once at startup: it calls `version.Latest` (5s ctx) and, **only if** `version.IsNewer(latest, Current())`, stores `a.latestVersion` via `QueueUpdateDraw` + `drawHeader`. `drawHeader` then adds a yellow `Update: ↑ vX.Y.Z available (:update)` line — its mere presence means "newer release exists", so the check must never set the field otherwise (it doesn't: a `(devel)`/pseudo/dirty build fails `IsNewer` and stays quiet). Best-effort: any proxy/network failure is swallowed.
+
+`:update` (parsed in `showCommandDialog`, before `jumpToView`, like `:ws`) runs `updateCommand`: it `exec.LookPath("go")`s — no toolchain, show the manual `go install …@latest` line — then `confirm`s and runs `go install <version.Module>@latest` under `tv.Suspend` (`runUpdate`, same real-terminal-handoff pattern as `exec.go`), waiting for Enter before restoring the TUI. The running process stays the old build until the user restarts; the message says so. `go install` execution can't be verified in this environment (the command classifier blocks it) — it builds and is wired the same way as exec.
 
 ### Secrets
 

@@ -73,6 +73,19 @@ export PATH=$PATH:$(go env GOPATH)/bin
 kcli
 ```
 
+Check the running build with `kcli --version`.
+
+### Updating
+
+kcli checks the Go module proxy once at startup and, when a newer release is
+published, shows an `Update: ↑ vX.Y.Z available (:update)` line in the header
+(best-effort — silent when offline, never shown for a local `(devel)` build).
+
+- **In-app:** type `:update` — it confirms, then re-runs `go install …@latest`
+  in place (needs the Go toolchain on `PATH`, the same channel it was installed
+  from). Restart kcli afterwards to run the new build.
+- **Manually:** `go install github.com/teknik-github/kcli@latest`.
+
 ### Build from source
 
 ```bash

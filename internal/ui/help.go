@@ -30,6 +30,7 @@ func (a *App) showHelp() {
 		{"\\", "move focus to the next split pane"},
 		{":", "command-jump to any resource by name/alias (incl. CRDs)"},
 		{":ws save|load", "save / restore the tab + split layout (\"default\" loads at startup)"},
+		{":update", "self-update to the latest release (needs the Go toolchain)"},
 		{"/", "filter rows (any column)"},
 		{"esc", "clear the active filter"},
 		{". / ,", "cycle sort column / flip direction"},

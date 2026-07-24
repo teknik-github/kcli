@@ -94,6 +94,8 @@ type App struct {
 	benches     []*benchRun // HTTP load tests, running or finished (Bench view)
 	nextBenchID int
 
+	latestVersion string // newest release seen on the proxy, "" until the check finishes or if not newer
+
 	marked map[string]bool // rowKey set for multi-select bulk actions; per-view
 
 	// Dynamic (generic/CRD) view state. dynIdx is the reserved Hidden slot in
@@ -235,6 +237,7 @@ func NewApp(client *k8s.Client, cfg *config.Config) *App {
 func (a *App) Run() error {
 	go a.autoRefresh()
 	go a.watchLoop()
+	go a.checkForUpdate()
 	if a.splash != nil {
 		// Start the corner animation once the event loop is running (QueueUpdateDraw
 		// blocks until then, so it can't be called synchronously before tv.Run).
@@ -420,6 +423,11 @@ func (a *App) drawHeader() {
 	}
 	if n := len(a.benches); n > 0 {
 		lines = append(lines, a.hdrLine("Bench", fmt.Sprintf("⚡ %d", n)))
+	}
+	if a.latestVersion != "" {
+		// The update-check goroutine only sets this when a strictly newer release
+		// exists, so its mere presence means "update available".
+		lines = append(lines, fmt.Sprintf("[%s::b]%-10s[-::-] [yellow]↑ %s available (:update)[-]", a.accent, "Update:", a.latestVersion))
 	}
 	a.header.SetText(strings.Join(lines, "\n"))
 }
