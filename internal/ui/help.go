@@ -51,6 +51,8 @@ func (a *App) showHelp() {
 		{"g", "live CPU/MEM graph"},
 		{"f", "port-forward (pods and services)"},
 		{"F", "open the Port-Fwd view (enter: live log, d: stop)"},
+		{"b", "HTTP benchmark (pods, services, ingresses)"},
+		{"B", "open the Bench view (enter: full report, d: stop/clear)"},
 		{"s", "scale"},
 		{"R", "rollout restart"},
 		{"u", "rollout undo (previous revision)"},

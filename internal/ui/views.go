@@ -34,6 +34,30 @@ func resolveView(query string) (int, bool) {
 	return -1, false
 }
 
+// localRows builds a Local view's rows from App state. Local views declare
+// their own builder in the registry, so nothing here needs to know whether the
+// view on screen is Port-Fwd, Bench, or something added later.
+func localRows(v *viewDef, a *App) []Row {
+	if v.LocalRows == nil {
+		return nil
+	}
+	return v.LocalRows(a)
+}
+
+// gotoLocalView switches to an app-local view by ID, remembering the current
+// view so `q` returns to it. Jumping between two Local views keeps the original
+// cluster view as the way back.
+func (a *App) gotoLocalView(id string) {
+	i := viewIndexByID(id)
+	if i < 0 || i == a.viewIdx {
+		return
+	}
+	if !a.view().Local {
+		a.prevViewIdx = a.viewIdx
+	}
+	a.switchView(i)
+}
+
 // match reports whether any of a row's visible cells (or its namespace/name
 // keys) contain the active filter (case-insensitive). An empty filter matches
 // everything. Searching every cell lets you filter by any column — e.g. Events

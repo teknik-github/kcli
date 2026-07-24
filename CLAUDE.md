@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`kcli` — an interactive terminal UI (TUI) for managing Kubernetes, built with `tview`/`tcell` and the official `client-go`. A lightweight k9s-style browser: multi-resource views, live metrics, logs (with grep), exec, scale, edit, delete, rollout restart/undo, cordon/drain, reveal-secret, port-forward, runtime context switch, `:`-command-jump, and a generic dynamic view that reaches any GVR/CRD.
+`kcli` — an interactive terminal UI (TUI) for managing Kubernetes, built with `tview`/`tcell` and the official `client-go`. A lightweight k9s-style browser: multi-resource views, live metrics, logs (with grep), exec, scale, edit, delete, rollout restart/undo, cordon/drain, reveal-secret, port-forward, HTTP benchmarking, runtime context switch, `:`-command-jump, and a generic dynamic view that reaches any GVR/CRD.
 
 ## Build & run
 
@@ -31,7 +31,7 @@ There is no permanent test suite. Two ways to verify changes:
 
 ## Architecture
 
-Three packages under `internal/`:
+Four packages under `internal/`:
 
 - **`internal/config`** — optional user config (`$KCLI_CONFIG` → `$XDG_CONFIG_HOME/kcli/config.yaml` → `~/.config/kcli/config.yaml`). Best-effort: a missing/malformed file yields defaults, never a startup error. Supplies startup namespace, refresh cadence (`baseRefresh`), accent colour, and custom `:jump` aliases. `main.go` loads it and passes it to `NewApp`.
 - **`internal/k8s`** — all cluster access (`client-go`). `Client` wraps a typed `clientset`, an optional `*metricsv.Clientset` (best-effort), the `*rest.Config` (kept for streaming subresources), and a lazily-built cached `RESTMapper`/`dynamic.Interface` plus a shared informer cache. Each resource has a display struct (`Pod`, `Deployment`, …) flattened for the table by a `toX` helper, plus a lister that reads from the informer cache and sorts by `(namespace, name)`. `Describe`/`Delete`/`Scale`/`RolloutRestart`/`RolloutUndo` are `kind`-string dispatchers. `exec.go` and `portforward.go` hold the SPDY streaming subresources.
@@ -39,6 +39,7 @@ Three packages under `internal/`:
 ### Informer cache & live updates (`internal/k8s/informer.go`)
 
 Listers read from a `SharedInformerFactory` cache instead of a live List each time: `cachedObjects(ctx, gvr, ns)` starts and syncs the resource's informer on first use, then serves subsequent reads from memory — so the auto-refresh poll costs no List API calls once warm. If an informer can't sync within the fetch ctx, `cachedObjects` returns `ok=false` and the lister **falls back to a live List**, so an un-watchable resource (or RBAC gap) still works exactly as before. Each started informer registers an Add/Update/Delete handler that calls `Client.onChange`; the UI sets that callback (`SetOnChange`) to nudge a bounded `watchTrigger` channel, and `watchLoop` debounces the nudges (400ms) into a `refresh()` — this is what makes changes appear live rather than on the next tick. `Client.Stop()` tears the informers down; `switchContext` calls it on the old client before swapping in the new one (and re-registers `onChange`). Metrics are not watchable, so the poll still runs (now cache-served for the resource columns) to refresh CPU/MEM. The **Dynamic/CRD** and **Local** views do not use this path.
+- **`internal/bench`** — a dependency-free HTTP load generator (`Run(ctx, Options, progress) (*Result, error)`). It knows nothing about Kubernetes; the UI hands it a plain URL. Workers tally into per-worker shards (no locks on the hot path), merged and sorted once at the end into counts / RPS / percentiles / status codes / grouped transport errors / `Histogram(n)`. Cancelling the ctx ends the run and still returns what was measured, so a stopped benchmark still has a report.
 - **`internal/ui`** — the `tview` app. `App` (in `app.go`) owns the widget tree and mutable state.
 
 ### The view registry — the central pattern
@@ -54,12 +55,17 @@ type viewDef struct {
     Columns         []string
     StatusCol       int           // column to color as a status, -1 = none
     ClusterScoped   bool          // no namespace (nodes)
-    Local           bool          // rows come from App state, not the cluster (Port-Fwd)
+    Local           bool          // rows come from App state, not the cluster (Port-Fwd, Bench)
     Hidden          bool          // omitted from the tab bar and Tab cycling (reach via :jump)
     Dynamic         bool          // generic view backed by the dynamic client (CRDs/any GVR)
     RefreshInterval time.Duration // per-view auto-refresh cadence; 0 = default (3s)
-    Caps            viewCaps      // Logs/Exec/Scale/Graph/Delete/PortForward/Restart/Rollback/Cordon/Drain/Edit/Reveal
+    Caps            viewCaps      // Logs/Exec/Scale/Graph/Delete/PortForward/Restart/Rollback/Cordon/Drain/Edit/Reveal/Bench
     Fetch           func(ctx, *k8s.Client, ns) ([]Row, error) // list + map (+metrics enrich)
+
+    LocalRows func(a *App) []Row // Local: rows from App state (never Fetch)
+    LocalHint string             // Local: key hints beside the tab-bar label
+    OnEnter   func(a *App)       // Local: Enter action
+    OnDelete  func(a *App)       // Local: `d` action
 }
 ```
 
@@ -127,7 +133,19 @@ The one field the `autoRefresh` ticker goroutine reads is `refreshEvery` (`atomi
 - **rollout undo** (`k8s/rollout.go`, `u`, `Caps.Rollback`): no server-side endpoint exists, so it is reconstructed client-side — Deployments swap in the prior ReplicaSet's pod template (stripping `pod-template-hash`); StatefulSets/DaemonSets re-apply the previous `ControllerRevision` as a strategic-merge patch. Returns a message; errors gracefully with "no previous revision" when there is only one.
 - **reveal secret** (`u/modals.go`, `v`, `Caps.Reveal`): confirms first, then `SecretData` decodes and a full-screen pane shows plain-text key/values. Distinct from `Describe`, which always masks.
 - **multi-select** (`ui/selection.go`, `Space`): `a.marked` is a `rowKey`-set (`namespace\x00name`) painted with `markColor` in `drawTable`. Offered only in `Caps.Delete` views; `d` routes to `confirmBulkDelete` when any row is marked, else the single-row path. Marks clear on view/namespace/context switch (`clearMarks`). This is the pattern for future bulk actions (label, annotate).
-- **port-forward** (`ui/portforward.go`, `f`) runs in the background, tracked in `App.forwards` and surfaced as `⇄ N` in the header. Works on **Pods and Services** — a Service (`Caps.PortForward`) resolves to a Ready backing pod via `ServiceForwardTarget` before forwarding. The **Port-Fwd view** is a `viewDef` with `Local: true` (rows come from `App.forwards`, not the cluster; `loadCurrentView` special-cases `Local` and never calls `Fetch`). `F` jumps to it (remembering `prevViewIdx`); Enter/`d` stops the selected forward (keyed by the ID column, which survives filter/sort); `q` returns via `backView`. This is the model for any app-local (non-cluster) view.
+- **HTTP benchmark** (`ui/bench.go`, `b`, `Caps.Bench`; view `B`) — see its own section below.
+- **port-forward** (`ui/portforward.go`, `f`) runs in the background, tracked in `App.forwards` and surfaced as `⇄ N` in the header. Works on **Pods and Services** — a Service (`Caps.PortForward`) resolves to a Ready backing pod via `ServiceForwardTarget` before forwarding. The **Port-Fwd view** is a `viewDef` with `Local: true` (rows come from `App.forwards`, not the cluster; `loadCurrentView` special-cases `Local` and never calls `Fetch`). `F` jumps to it (remembering `prevViewIdx`); Enter/`d` stops the selected forward (keyed by the ID column, which survives filter/sort); `q` returns via `backView`. **App-local views are registry-driven**: `Local: true` plus `LocalRows`/`LocalHint`/`OnEnter`/`OnDelete`, all assigned in an `init()` in the feature's own file — naming them in the registry literal is an initialization cycle (those closures reach `resourceViews` through `App`, same trap as `pulseRows`). `loadCurrentView`, `loadPane`, `drawTabs`, and `onTableKey`'s Enter/`d` branches read those fields, so **nothing outside the registry switches on which Local view is on screen** — that is what let Bench be added beside Port-Fwd. `gotoLocalView(id)` is the shared "jump here, remember where I came from" helper behind `F` and `B`.
+
+### HTTP benchmark (`ui/bench.go`, `internal/bench`)
+
+`b` load-tests the selected Pod/Service/Ingress; `B` opens the **Bench** view (a `Local` view over `App.benches`, one row per run: ID/TARGET/REQS/CONC/RPS/P95/OK/ERR/STATUS). Enter opens the full report (throughput, bytes, min/mean/p50/p90/p95/p99/max, status-code table, grouped errors, latency histogram); `d` cancels a running test and drops a finished one.
+
+The split of responsibility is the point: **`internal/bench` is the engine and has no k8s import**, `ui/bench.go` only decides *what URL* to hand it. `benchTarget` does that:
+
+- **Pod/Service** — opens an **ephemeral port-forward** on a kernel-assigned free port (`freeLocalPort`), waits for `readyCh` (15s cap, also watching the run's ctx and the forwarder's error channel), and returns `http://127.0.0.1:<port><path>` plus a `stop` func that `runBench` defers. These forwards are deliberately **not** in `App.forwards` — they live and die with the run and must not show up in the Port-Fwd view. A Service goes through `ServiceForward` first, so `targetPort` (including named ports) is followed exactly as a manual forward would.
+- **Ingress** — no forward at all: `k8s.IngressTarget` returns the published LB address (falling back to the rule's host), the `Host` header to send, and whether TLS covers it. That path measures the ingress controller too, which is the whole point of benchmarking an Ingress. `Insecure` is set for https because cluster certs are routinely self-signed.
+
+`runBench` is a plain background goroutine following the usual rule — `cl := a.client` captured on the UI goroutine in `startBench` — and every status/progress write goes through `QueueUpdateDraw`, so `benchRun`'s fields need no locking. The engine's `progress` callback fires every 250ms and calls `redrawBench`, which repaints only when the Bench view is actually on screen.
 
 ### Secrets
 

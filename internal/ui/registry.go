@@ -31,6 +31,7 @@ type viewCaps struct {
 	Drain       bool // cordon + evict pods (nodes)
 	Edit        bool // edit YAML in $EDITOR and apply
 	Reveal      bool // decode + show values (secrets)
+	Bench       bool // run an HTTP load test against it (pods, services, ingresses)
 }
 
 // viewDef describes one resource view. Adding a resource means appending one
@@ -42,13 +43,23 @@ type viewDef struct {
 	Columns         []string
 	StatusCol       int           // column index to color as a status, -1 for none
 	ClusterScoped   bool          // no namespace (nodes)
-	Local           bool          // rows come from App state, not the cluster (Fetch unused)
+	Local           bool          // rows come from App state, not the cluster (LocalRows, not Fetch)
 	Hidden          bool          // omitted from the tab bar and Tab cycling (reach via :jump)
 	Dynamic         bool          // generic view backed by the dynamic client (CRDs, any GVR)
 	Pulse           bool          // health summary; rows are kinds, Enter jumps to that view
 	RefreshInterval time.Duration // per-view auto-refresh cadence; 0 = default (refreshInterval)
 	Caps            viewCaps
 	Fetch           func(ctx context.Context, c *k8s.Client, namespace string) ([]Row, error)
+
+	// Local views are app-local lists (port-forwards, benchmark runs): they build
+	// their rows from App state and carry their own Enter/d behaviour, so nothing
+	// outside the registry needs to know which one is on screen. Assigned in an
+	// init() beside the feature, never in the literal below — these closures reach
+	// resourceViews through App, which would be an initialization cycle.
+	LocalRows func(a *App) []Row // rows for a Local view
+	LocalHint string             // key hints shown beside the label in the tab bar
+	OnEnter   func(a *App)       // Local: Enter on the selected row
+	OnDelete  func(a *App)       // Local: 'd' on the selected row
 }
 
 // resourceViews is the single source of truth for the tab bar and all
@@ -60,7 +71,7 @@ var resourceViews = []*viewDef{
 		Title:     "Pods",
 		Columns:   []string{"NAMESPACE", "NAME", "READY", "STATUS", "RESTARTS", "CPU", "MEM", "AGE", "NODE"},
 		StatusCol: 3,
-		Caps:      viewCaps{Logs: true, Exec: true, Graph: true, Delete: true, PortForward: true, Edit: true},
+		Caps:      viewCaps{Logs: true, Exec: true, Graph: true, Delete: true, PortForward: true, Edit: true, Bench: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			pods, err := c.Pods(ctx, ns)
 			if err != nil {
@@ -122,7 +133,7 @@ var resourceViews = []*viewDef{
 		Title:     "Services",
 		Columns:   []string{"NAMESPACE", "NAME", "TYPE", "CLUSTER-IP", "EXTERNAL-IP", "PORTS", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Delete: true, Edit: true, PortForward: true},
+		Caps:      viewCaps{Delete: true, Edit: true, PortForward: true, Bench: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			svcs, err := c.Services(ctx, ns)
 			if err != nil {
@@ -223,7 +234,7 @@ var resourceViews = []*viewDef{
 		Title:     "Ingresses",
 		Columns:   []string{"NAMESPACE", "NAME", "CLASS", "HOSTS", "ADDRESS", "PORTS", "AGE"},
 		StatusCol: -1,
-		Caps:      viewCaps{Delete: true, Edit: true},
+		Caps:      viewCaps{Delete: true, Edit: true, Bench: true},
 		Fetch: func(ctx context.Context, c *k8s.Client, ns string) ([]Row, error) {
 			ings, err := c.Ingresses(ctx, ns)
 			if err != nil {
@@ -358,6 +369,16 @@ var resourceViews = []*viewDef{
 		Columns:   []string{"ID", "NAMESPACE", "POD", "PORTS", "STATUS"},
 		StatusCol: 4,
 		Local:     true, // rows built from App.forwards, not the cluster
+		// LocalRows/LocalHint/OnEnter/OnDelete are wired in portforward.go's init.
+	},
+	{
+		ID:        "bench",
+		Aliases:   []string{"benchmark", "load", "hey"},
+		Title:     "Bench",
+		Columns:   []string{"ID", "TARGET", "REQS", "CONC", "RPS", "P95", "OK", "ERR", "STATUS"},
+		StatusCol: 8,
+		Local:     true, // rows built from App.benches, not the cluster
+		// LocalRows/LocalHint/OnEnter/OnDelete are wired in bench.go's init.
 	},
 	{
 		// Generic view for CRDs / any GVR the registry has no explicit entry for.

@@ -400,6 +400,54 @@ func targetPodPort(sp corev1.ServicePort, pod *corev1.Pod) int {
 	return int(sp.Port) // named but not found on the pod; fall back
 }
 
+// IngressTarget resolves an Ingress to something an HTTP client can actually
+// hit: the address to dial (the load-balancer IP/hostname when the controller
+// has published one, else the rule's own host), the Host header that selects
+// the rule, and whether the ingress terminates TLS for that host. A benchmark
+// against an Ingress goes straight over the network — no port-forward — so it
+// measures the real ingress path, controller included.
+func (c *Client) IngressTarget(ctx context.Context, namespace, name string) (addr, host string, secure bool, err error) {
+	ing, err := c.clientset.NetworkingV1().Ingresses(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", "", false, err
+	}
+	for _, r := range ing.Spec.Rules {
+		if r.Host != "" {
+			host = r.Host
+			break
+		}
+	}
+	for _, lb := range ing.Status.LoadBalancer.Ingress {
+		if lb.IP != "" {
+			addr = lb.IP
+			break
+		}
+		if lb.Hostname != "" {
+			addr = lb.Hostname
+			break
+		}
+	}
+	if addr == "" {
+		addr = host // no published address: hope DNS resolves the rule's host
+	}
+	if addr == "" {
+		return "", "", false, fmt.Errorf("ingress %s has neither an address nor a host rule", name)
+	}
+	for _, t := range ing.Spec.TLS {
+		if host == "" || len(t.Hosts) == 0 {
+			secure = true
+			break
+		}
+		for _, h := range t.Hosts {
+			if h == host {
+				secure = true
+				break
+			}
+		}
+	}
+	return addr, host, secure, nil
+}
+
 // Ingress is a display-oriented snapshot of an ingress.
 type Ingress struct {
 	Name      string

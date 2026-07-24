@@ -82,6 +82,9 @@ type App struct {
 	forwards  []*portForward // active background port-forwards
 	nextFwdID int
 
+	benches     []*benchRun // HTTP load tests, running or finished (Bench view)
+	nextBenchID int
+
 	marked map[string]bool // rowKey set for multi-select bulk actions; per-view
 
 	// Dynamic (generic/CRD) view state. dynIdx is the reserved Hidden slot in
@@ -295,9 +298,10 @@ func (a *App) loadCurrentView() {
 
 	a.loadSplitPanes() // the parked panes (if split) reload on the same cadence
 
-	// Local views (port-forwards) are backed by App state, not the cluster.
+	// Local views (port-forwards, benchmarks) are backed by App state, not the
+	// cluster: they build their own rows and never touch the client.
 	if view.Local {
-		a.rows = a.forwardRows()
+		a.rows = localRows(view, a)
 		a.drawHeader()
 		a.drawTabs()
 		a.drawTable()
@@ -401,6 +405,9 @@ func (a *App) drawHeader() {
 	if n := len(a.forwards); n > 0 {
 		lines = append(lines, a.hdrLine("Forwards", fmt.Sprintf("⇄ %d", n)))
 	}
+	if n := len(a.benches); n > 0 {
+		lines = append(lines, a.hdrLine("Bench", fmt.Sprintf("⚡ %d", n)))
+	}
 	a.header.SetText(strings.Join(lines, "\n"))
 }
 
@@ -467,8 +474,12 @@ func (a *App) drawTabs() {
 		line += " "
 	}
 	switch {
-	case a.view().Local: // e.g. Port-Fwd: show it separately with its own hints
-		line += fmt.Sprintf("  [%s:%s:b] %s [-:-:-]  [gray]enter log · d stop · q back[-]", a.accentTextTag(), a.accent, a.view().Title)
+	case a.view().Local: // e.g. Port-Fwd / Bench: show it separately with its own hints
+		hint := a.view().LocalHint
+		if hint == "" {
+			hint = "q back"
+		}
+		line += fmt.Sprintf("  [%s:%s:b] %s [-:-:-]  [gray]%s[-]", a.accentTextTag(), a.accent, a.view().Title, hint)
 	case a.view().Hidden: // e.g. a Dynamic/CRD view reached via :jump
 		line += fmt.Sprintf("  [%s:%s:b] %s [-:-:-]  [gray]:jump / tab to leave[-]", a.accentTextTag(), a.accent, a.view().Title)
 	}
@@ -479,9 +490,14 @@ func (a *App) setHeaderError(err error) {
 	a.header.SetText(fmt.Sprintf("[red]error: %v[-]", err))
 }
 
-const footerHelp = "[::b]q[-] quit  [::b]?[-] help  [::b]tab[-] view  [::b]t[-] newtab  [::b][ ][-] tabs  [::b]:[-] jump  [::b]enter[-] detail  [::b]/[-] filter  [::b].[-] sort  " +
-	"[::b]g[-] graph  [::b]f[-] fwd  [::b]F[-] fwd-view  [::b]l[-] logs  [::b]e[-] exec  [::b]E[-] edit  [::b]s[-] scale  " +
-	"[::b]R[-] restart  [::b]u[-] undo  [::b]v[-] reveal  [::b]c[-] cordon  [::b]D[-] drain  [::b]space[-] mark  [::b]d[-] del  [::b]n[-] ns  [::b]x[-] ctx"
+// footerHelp is the one-line cheat sheet. It is longer than most terminals are
+// wide, so it is ordered by how often a key is reached for — navigation first,
+// the niche node/secret actions last, where clipping costs least. "?" is the
+// complete reference. "[ []" is tview's escape for a literal "[ ]" (an extra
+// "[" before the closing bracket); unescaped it would be eaten as a colour tag.
+const footerHelp = "[::b]q[-] quit  [::b]?[-] help  [::b]tab[-] view  [::b]n[-] ns  [::b]x[-] ctx  [::b]:[-] jump  [::b]/[-] filter  [::b].[-] sort  " +
+	"[::b]enter[-] detail  [::b]t[-] tab  [::b][ [][-] tabs  [::b]l[-] logs  [::b]e[-] exec  [::b]E[-] edit  [::b]f[-] fwd  [::b]F[-] fwds  [::b]b[-] bench  " +
+	"[::b]g[-] graph  [::b]s[-] scale  [::b]R[-] restart  [::b]u[-] undo  [::b]spc[-] mark  [::b]d[-] del  [::b]v[-] reveal  [::b]c[-] cordon  [::b]D[-] drain"
 
 // logoLines is the KCLI wordmark in figlet's "ANSI Shadow" style: the solid
 // blocks are the letter faces, the box-drawing glyphs their drop shadow. All

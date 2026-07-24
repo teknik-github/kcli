@@ -15,6 +15,18 @@ import (
 	"github.com/teknik-github/kcli/internal/k8s"
 )
 
+// init wires the Port-Fwd view's app-local behaviour. It cannot live in the
+// registry literal: these closures reach resourceViews through App, which would
+// make the variable depend on itself.
+func init() {
+	if v, ok := viewByID("portforward"); ok {
+		v.LocalRows = (*App).forwardRows
+		v.LocalHint = "enter log · d stop · q back"
+		v.OnEnter = (*App).showForwardLog
+		v.OnDelete = (*App).stopSelectedForward
+	}
+}
+
 // pfLog is a bounded, line-oriented, concurrency-safe sink for a port-forward's
 // out/errOut streams (the "Forwarding from …" notices and per-connection
 // errors). The forwarding goroutine writes; the UI reads via text().
@@ -181,7 +193,7 @@ func (a *App) startPortForward(ns, name string, ports []string) {
 // count current.
 func (a *App) redrawForwards() {
 	a.drawHeader()
-	if a.view().Local {
+	if a.view().ID == "portforward" {
 		a.rows = a.forwardRows()
 		a.drawTable()
 	}
@@ -203,18 +215,8 @@ func (a *App) forwardRows() []Row {
 }
 
 // gotoForwardsView switches to the Port-Fwd view, remembering the current view
-// so `<` can return to it.
-func (a *App) gotoForwardsView() {
-	for i, v := range resourceViews {
-		if v.Local {
-			if !a.view().Local {
-				a.prevViewIdx = a.viewIdx // remember where we came from
-			}
-			a.switchView(i)
-			return
-		}
-	}
-}
+// so `q` can return to it.
+func (a *App) gotoForwardsView() { a.gotoLocalView("portforward") }
 
 // backView returns from a hidden (Local) view to the previously active one.
 func (a *App) backView() {

@@ -17,7 +17,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 
 ## Features
 
-- **14 resource views**: Pods, Deployments, DaemonSets, Services, Nodes, StatefulSets, ReplicaSets, PVCs, Ingresses, Jobs, CronJobs, ConfigMaps, Secrets, Events — plus a built-in **Port-Forward** view and a **Pulse** health summary.
+- **14 resource views**: Pods, Deployments, DaemonSets, Services, Nodes, StatefulSets, ReplicaSets, PVCs, Ingresses, Jobs, CronJobs, ConfigMaps, Secrets, Events — plus a built-in **Port-Forward** view, a **Pulse** health summary, and an **HTTP benchmark** view.
 - **Pulse** (`0`, or `:pulse`): one-screen cluster health — per kind, how many objects exist, how many are healthy, how many are not, and why (`3 pending, 1 crashloopbackoff`). `Enter` on a row opens that kind's view. Pairs well with a split pane as a permanent monitor.
 - **Command-jump** (`:`): jump to any view by name or short alias (`:svc`, `:cj`, `:ev`, …).
 - **Generic / CRD view**: `:` any resource the cluster knows — CustomResourceDefinitions and built-ins without a dedicated view — resolved through discovery (kubectl-style short names) and listed read-only (name/age + YAML detail).
@@ -28,6 +28,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Multi-pod tail** (`L`): follow many pods in one pane — the marked rows, or every pod the current filter shows. Each line is prefixed with its pod name in its own colour, and `/` greps pod names as well as line text.
 - **Interactive exec shell** into a container (auto-fallback `bash` → `sh`).
 - **Live CPU/MEM graphs** (sparklines) for pods and nodes.
+- **HTTP benchmark** (`b`, view `B`): load-test a Pod, Service, or Ingress from inside kcli — requests/s, latency percentiles (p50/p90/p95/p99), status-code and error breakdowns, and a latency histogram. Pods and Services are reached through an ephemeral port-forward; an Ingress is hit directly, so it measures the real ingress path.
 - **Actions**: describe (YAML + events), edit YAML in `$EDITOR`, scale, rollout restart, **rollout undo**, delete, cordon/uncordon & drain nodes, **reveal secret** values, port-forward (pods *and* services).
 - **Filter** (any-column substring) & **sort** by column (duration- and number-aware).
 - **Safe secrets**: values are always masked (`<redacted: N bytes>`) when describing; plain-text reveal (`v`) is a separate, confirmed action.
@@ -186,9 +187,11 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `D`                 | Drain a node (cordon + evict pods)                             |
 | `f`                 | Start a port-forward (pod or service)                          |
 | `F`                 | Open the Port-Forward view                                      |
+| `b`                 | Run an HTTP benchmark (pod, service, or ingress)               |
+| `B`                 | Open the Bench view                                             |
 | `Space`             | Mark / unmark the current row (multi-select)                   |
 | `d`                 | Delete — the marked rows if any, else the current row          |
-| `q`                 | Quit (in a hidden view — Port-Fwd/Dynamic — return instead)    |
+| `q`                 | Quit (in a hidden view — Port-Fwd/Bench/Dynamic — return instead) |
 
 > Actions are *data-driven*: a key only applies in views that support it (see the table below). Pressing `s` in Pods, for example, does nothing.
 
@@ -196,17 +199,19 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 
 | View          | Available actions                                     |
 |---------------|-------------------------------------------------------|
-| Pods          | logs, exec, graph, edit, delete, port-forward         |
+| Pods          | logs, exec, graph, edit, delete, port-forward, **bench** |
 | Deployments   | scale, restart, **undo**, edit, delete                |
 | DaemonSets    | restart, **undo**, edit, delete                       |
 | StatefulSets  | scale, restart, **undo**, edit, delete                |
 | ReplicaSets   | edit, delete                                          |
 | Nodes         | graph, cordon/uncordon, drain                         |
-| Services      | edit, delete, **port-forward**                        |
+| Services      | edit, delete, **port-forward**, **bench**             |
 | Secrets       | edit, delete, **reveal** (`v`)                        |
-| Ingresses, Jobs, CronJobs, ConfigMaps, PVCs | edit, delete            |
+| Ingresses     | edit, delete, **bench**                               |
+| Jobs, CronJobs, ConfigMaps, PVCs | edit, delete                     |
 | Events        | read-only (`Enter` for YAML)                          |
 | Port-Fwd      | `Enter` view the forward's live log; `d` stop it; `q` go back |
+| Bench         | `Enter` the full report; `d` stop / clear the run; `q` go back |
 | Dynamic/CRD (`:`) | read-only (`Enter` for YAML); `Tab`/`:`/`q` to leave |
 
 ### Feature notes
@@ -224,6 +229,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 - **Rollout undo** (`u`): rolls back to the previous revision, reconstructed client-side (no server endpoint exists) — Deployments restore the prior ReplicaSet's pod template; StatefulSets/DaemonSets re-apply the previous `ControllerRevision`. Reports "no previous revision" when there is nothing to undo.
 - **Reveal secret** (`v`): after a confirmation, decodes and shows the secret's values in plain text — deliberately separate from `describe`, which always masks.
 - **Port-forward** works on Pods and Services (a Service resolves to a Ready backing pod first, translating the service port to the pod's targetPort). Forwards bind `$KCLI_PF_ADDRESS` (comma-separated; default `0.0.0.0`, all interfaces), so the port is reachable from other hosts — handy when kcli runs on a remote server over SSH, but note `0.0.0.0` exposes the forwarded port to your network. Set `KCLI_PF_ADDRESS=127.0.0.1` to keep forwards loopback-only. It runs in the background and stays alive after the dialog closes; the header shows `⇄ N`. Manage forwards from the Port-Fwd view (`F`): `Enter` opens a live, timestamped log of the forwarder's output (the "Forwarding from …" notices and any connection errors), `d` stops the selected forward.
+- **HTTP benchmark** (`b`): a small load generator built in. The dialog asks for a path, port, request count, and concurrency; the run then happens in the background and shows up as a row in the **Bench** view (`B`) with live progress, throughput, p95, and error count. `Enter` opens the full report — elapsed time, requests/s, bytes transferred, min/mean/p50/p90/p95/p99/max latency, a status-code table, grouped transport errors, and a latency histogram. **Pods and Services** are benchmarked through an ephemeral port-forward opened just for the run and torn down with it (a Service follows `targetPort` to the pod's real port, like a manual forward), so the measurement is of the workload rather than the network in front of it. An **Ingress** is benchmarked directly over the network at its published address, with the `Host` header set to the rule's host and TLS verification relaxed (cluster certs are routinely self-signed) — so that one *does* include the ingress controller. Redirects are not followed. Note that a Pod/Service run tunnels through one port-forward, so at high concurrency the SPDY tunnel — not the workload — becomes the ceiling and some connections show up as failures; benchmark an Ingress (or run kcli in-cluster) to push real load. `d` stops a running test or clears a finished one. The header shows `⚡ N` while any run is on the list.
 - **Events** are sorted newest-first and poll more slowly than other views; TYPE `Normal` is green, `Warning` is red.
 - **Multi-select** (`Space`): marks the current row (highlighted background) in any Delete-capable view; `d` then deletes every marked row after one confirmation showing the count. Marks are keyed by namespace/name so they survive filter and sort, and clear on any view/namespace/context switch.
 - **Context switch** (`x`): rebuilds the client for the chosen kubeconfig context and reloads; the namespace, filter, and sort reset since they are cluster-specific. In-flight actions and background port-forwards keep running against the cluster they were started on.
@@ -232,7 +238,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 
 ## Architecture
 
-Two packages under `internal/`:
+Three packages under `internal/`:
 
 ### `internal/k8s` — cluster access
 
@@ -248,6 +254,12 @@ exec.go          interactive exec shell (SPDY + raw mode + resize)
 portforward.go   port-forward (SPDY)
 ```
 
+`IngressTarget` (in `client.go`) resolves an Ingress to a dialable address + `Host` header, which is what the benchmark hits when the target is an ingress.
+
+### `internal/bench` — the HTTP load generator
+
+Pure Go, no Kubernetes: `Run(ctx, Options, progress)` fires `Concurrency` workers at a URL until the request budget (or the duration) runs out, and returns a `Result` — counts, throughput, bytes, latency percentiles, per-status-code and grouped-error tallies, plus a `Histogram(n)` for the report. Each worker tallies into its own shard so the hot path takes no locks; cancelling the context ends the run and still returns what was measured.
+
 ### `internal/ui` — the tview interface
 
 ```
@@ -259,6 +271,7 @@ views.go         generic filter & sort (cellLess), resolveView (:jump), humanAge
 pods.go          drawTable + key handler (onTableKey)
 tabs.go          browser-style tabs (tabState sessions, workspace strip, rename)
 split.go         2–4 pane split layout over the tabs (pane focus, parked-pane refresh)
+bench.go         HTTP benchmark: dialog, ephemeral forward, run list, report
 selection.go     multi-select marks + bulk delete
 modals.go        detail, logs (stream + grep), scale, delete, restart, rollback, cordon, drain, reveal, filter, namespace, :jump prompt
 multilog.go      multi-pod tail (fan-out streams, coloured pod prefixes, grep)
@@ -283,12 +296,17 @@ type viewDef struct {
     Columns         []string
     StatusCol       int           // column to color as a status, -1 = none
     ClusterScoped   bool          // no namespace (nodes)
-    Local           bool          // rows come from App state, not the cluster (Port-Fwd)
+    Local           bool          // rows come from App state, not the cluster (Port-Fwd, Bench)
     Hidden          bool          // off the tab bar / Tab cycling; reached via :jump (Dynamic slot)
     Dynamic         bool          // generic view backed by the dynamic client (CRDs / any GVR)
     RefreshInterval time.Duration // per-view auto-refresh cadence; 0 = default (3s)
-    Caps            viewCaps      // which actions apply (Logs/Exec/Scale/Graph/Restart/Rollback/Reveal/…)
+    Caps            viewCaps      // which actions apply (Logs/Exec/Scale/Graph/Restart/Rollback/Reveal/Bench/…)
     Fetch           func(ctx, *k8s.Client, ns) ([]Row, error)
+
+    LocalRows func(a *App) []Row // Local views: rows built from App state
+    LocalHint string             // Local views: key hints shown beside the label
+    OnEnter   func(a *App)       // Local views: Enter action
+    OnDelete  func(a *App)       // Local views: `d` action
 }
 ```
 
@@ -300,6 +318,8 @@ Every resource is flattened into the uniform `Row{Namespace, Name, Cells}`. Filt
 
 1. In `internal/k8s/client.go`: add a display struct + a lister (sorting by `(ns, name)`), then register the kind in the `Delete`/`Describe`/`Scale`/`RolloutRestart`/`RolloutUndo` dispatchers where relevant.
 2. In `internal/ui/registry.go`: add one `viewDef` whose `Fetch` calls that lister (and any `Aliases`).
+
+An **app-local** view (one whose rows come from kcli itself rather than the cluster — Port-Fwd, Bench) is the same thing with `Local: true` and its `LocalRows`/`LocalHint`/`OnEnter`/`OnDelete` assigned in an `init()` beside the feature (not in the registry literal: those closures reach `resourceViews` through `App`, which Go rejects as an initialization cycle).
 
 ### Concurrency invariant (important)
 

@@ -63,7 +63,10 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 	case tcell.KeyEnter:
 		switch {
 		case a.view().Local:
-			a.showForwardLog() // Port-Fwd view: Enter shows the forward's log
+			// App-local views (Port-Fwd, Bench) declare their own Enter action.
+			if f := a.view().OnEnter; f != nil {
+				f(a)
+			}
 		case a.view().Pulse:
 			a.jumpFromPulse() // Pulse: Enter opens the kind under the cursor
 		default:
@@ -165,6 +168,14 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 	case 'F':
 		a.gotoForwardsView() // global: jump to the Port-Fwd view
 		return nil
+	case 'B':
+		a.gotoBenchView() // global: jump to the Bench view
+		return nil
+	case 'b':
+		if caps.Bench {
+			a.showBenchDialog() // HTTP load test against this pod/service/ingress
+		}
+		return nil
 	case 's':
 		if caps.Scale {
 			a.showScaleDialog()
@@ -202,7 +213,9 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 	case 'd':
 		if a.view().Local {
-			a.stopSelectedForward() // Port-Fwd view: d stops the forward
+			if f := a.view().OnDelete; f != nil {
+				f(a) // Port-Fwd stops the forward, Bench stops/clears the run
+			}
 		} else if caps.Delete {
 			a.confirmDelete()
 		}
@@ -248,9 +261,9 @@ func (a *App) onTableKey(event *tcell.EventKey) *tcell.EventKey {
 
 func statusColor(status string) tcell.Color {
 	switch status {
-	case "Running", "Succeeded", "Completed", "Bound", "Normal", "OK":
+	case "Running", "Succeeded", "Completed", "Bound", "Normal", "OK", "forwarding", "done":
 		return tcell.ColorGreen
-	case "Pending", "ContainerCreating", "Terminating", "WARN":
+	case "Pending", "ContainerCreating", "Terminating", "WARN", "starting", "running":
 		return tcell.ColorYellow
 	case "":
 		return tcell.ColorWhite
