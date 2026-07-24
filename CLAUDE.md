@@ -18,7 +18,7 @@ gofmt -w internal/ main.go
 ./kcli                    # run (needs a real terminal + reachable cluster)
 ```
 
-Kubeconfig resolves in order: `$KUBECONFIG` → `~/.kube/config` → in-cluster. That resolution is left entirely to `clientcmd.NewDefaultClientConfigLoadingRules()` (so a multi-file `$KUBECONFIG` merges like kubectl's); `NewClient("")` is the normal call, and its path argument only exists to set `ExplicitPath`, which overrides everything. Metrics (CPU/MEM columns, graphs) need metrics-server; absent, those render `-` and never error.
+`main.go` silences client-go's async logging before the UI starts (`klog.SetLogger(logr.Discard())` **and** an empty `utilruntime.ErrorHandlers`): a resetting port-forward stream or a dropped watch otherwise reaches `runtime.HandleError`, which klog prints to **stderr** — and stderr scribbles straight over the full-screen TUI. klog's own `LogToStderr(false)`/`SetOutput` do not reliably mute error severity, hence the two-pronged kill. Kubeconfig resolves in order: `$KUBECONFIG` → `~/.kube/config` → in-cluster. That resolution is left entirely to `clientcmd.NewDefaultClientConfigLoadingRules()` (so a multi-file `$KUBECONFIG` merges like kubectl's); `NewClient("")` is the normal call, and its path argument only exists to set `ExplicitPath`, which overrides everything. Metrics (CPU/MEM columns, graphs) need metrics-server; absent, those render `-` and never error.
 
 ## Testing a TUI
 
