@@ -54,13 +54,58 @@ func (a *App) assignPaneTables() {
 	}
 }
 
+// openPaneOverlay shows p in the focused pane (the whole table area when
+// unsplit), leaving the header, tab bars, footer and any other panes on screen.
+// The overlay is pinned to that pane position, so `\` can later move the focus
+// away without dragging the overlay along.
+func (a *App) openPaneOverlay(p tview.Primitive) {
+	a.closePaneOverlay() // never stack two; the graph is the only user today
+	a.paneOverlay = p
+	a.overlayPane = a.activePane
+	a.rebuildBody()
+}
+
+// closePaneOverlay puts the pane's table back. Safe to call when nothing is
+// open. It also stops the graph sampler, since the graph is the only overlay —
+// so any code path that dismisses the overlay (a structural key, a view switch)
+// tears the sampler down too, without having to know a graph was showing.
+func (a *App) closePaneOverlay() {
+	if a.paneOverlay == nil {
+		return
+	}
+	a.stopGraph()
+	a.paneOverlay = nil
+	a.rebuildBody()
+	a.drawTable()
+}
+
+// overlayVisibleAt reports whether the overlay occupies pane position p.
+func (a *App) overlayVisibleAt(p int) bool {
+	return a.paneOverlay != nil && p == a.overlayPane
+}
+
+// focusTarget is the widget keys should be aimed at: the overlay when the focus
+// is sitting on the pane holding it, otherwise the live table. Moving the focus
+// to another pane while the graph stays open lands here on the table, so all the
+// normal table keys work again.
+func (a *App) focusTarget() tview.Primitive {
+	if a.paneOverlay != nil && (a.split == splitOff || a.activePane == a.overlayPane) {
+		return a.paneOverlay
+	}
+	return a.table
+}
+
 // rebuildBody lays the panes out for the current mode and pane count.
 func (a *App) rebuildBody() {
 	a.body.Clear()
 	if a.split == splitOff {
 		a.table.SetBorder(false)
-		a.body.SetDirection(tview.FlexRow).AddItem(a.table, 0, 1, true)
-		a.tv.SetFocus(a.table)
+		item := tview.Primitive(a.table)
+		if a.paneOverlay != nil {
+			item = a.paneOverlay
+		}
+		a.body.SetDirection(tview.FlexRow).AddItem(item, 0, 1, true)
+		a.tv.SetFocus(a.focusTarget())
 		return
 	}
 	a.assignPaneTables()
@@ -71,9 +116,9 @@ func (a *App) rebuildBody() {
 		a.body.SetDirection(tview.FlexRow)
 		for p := 0; p < a.paneCount; p += 2 {
 			row := tview.NewFlex().SetDirection(tview.FlexColumn)
-			row.AddItem(a.paneTable[p], 0, 1, false)
+			row.AddItem(a.paneWidget(p), 0, 1, false)
 			if p+1 < a.paneCount {
-				row.AddItem(a.paneTable[p+1], 0, 1, false)
+				row.AddItem(a.paneWidget(p+1), 0, 1, false)
 			}
 			a.body.AddItem(row, 0, 1, false)
 		}
@@ -84,11 +129,23 @@ func (a *App) rebuildBody() {
 		}
 		a.body.SetDirection(dir)
 		for p := 0; p < a.paneCount; p++ {
-			a.body.AddItem(a.paneTable[p], 0, 1, p == a.activePane)
+			a.body.AddItem(a.paneWidget(p), 0, 1, p == a.activePane)
 		}
 	}
 	a.drawPaneTitles()
-	a.tv.SetFocus(a.table) // keys always drive the live pane
+	a.tv.SetFocus(a.focusTarget())
+}
+
+// paneWidget is the primitive to lay out at position p: the overlay when it is
+// pinned there, the live table at the focused pane, otherwise a parked table.
+func (a *App) paneWidget(p int) tview.Primitive {
+	if a.overlayVisibleAt(p) {
+		return a.paneOverlay
+	}
+	if p == a.activePane {
+		return a.table
+	}
+	return a.paneTable[p]
 }
 
 // toggleSplit applies a split arrangement. From unsplit, `|` and `-` open two
@@ -96,6 +153,7 @@ func (a *App) rebuildBody() {
 // the split by one pane and folds it away once it is full. Splitting with fewer
 // tabs than panes clones the current session to fill them.
 func (a *App) toggleSplit(mode int) {
+	a.closePaneOverlay() // a layout change invalidates the overlay's pinned pane
 	switch {
 	case a.split == mode: // same arrangement again: grow it, or fold it away
 		if mode == splitGrid || !a.addPane() {
@@ -144,6 +202,7 @@ func (a *App) dropPane() {
 	if a.split == splitOff {
 		return
 	}
+	a.closePaneOverlay() // the pane it is pinned to may be the one going away
 	if a.paneCount <= 2 {
 		a.unsplit()
 		return
@@ -383,8 +442,8 @@ func (a *App) loadPane(p int) {
 	if !ok {
 		return
 	}
-	if view.Local { // Port-Fwd: rows come from App state, never the cluster
-		t.rows = a.forwardRows()
+	if view.Local { // Port-Fwd / Bench: rows come from App state, never the cluster
+		t.rows = localRows(view, a)
 		a.drawPane(p)
 		return
 	}
@@ -422,10 +481,35 @@ func (a *App) drawPaneTitles() {
 	}
 	a.assignPaneTables()
 	for p := 0; p < a.paneCount; p++ {
+		if a.overlayVisibleAt(p) {
+			// The overlay draws its own border; just tint it to match whether it is
+			// the focused pane, so `\` reads the same as it does on the tables.
+			a.tintOverlayBorder(p == a.activePane)
+			continue
+		}
 		if tbl := a.paneTable[p]; tbl != nil {
 			a.paneTitle(tbl, a.paneTabs[p], p == a.activePane)
 		}
 	}
+}
+
+// tintOverlayBorder colours the overlay's border accent when it is the focused
+// pane, grey otherwise — matching the tables. It is best-effort: only a Box-
+// backed primitive (the graph's TextView is one) can be tinted.
+func (a *App) tintOverlayBorder(focused bool) {
+	type bordered interface {
+		SetBorderColor(tcell.Color) *tview.Box
+		SetTitleColor(tcell.Color) *tview.Box
+	}
+	b, ok := a.paneOverlay.(bordered)
+	if !ok {
+		return
+	}
+	color := accentColor(a.accent)
+	if !focused {
+		color = grayPane
+	}
+	b.SetBorderColor(color).SetTitleColor(color)
 }
 
 // paneTitle borders one pane and labels it with its tab number and title.

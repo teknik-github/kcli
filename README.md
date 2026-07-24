@@ -27,7 +27,7 @@ A single binary with no runtime dependencies. It shows many resource kinds in ta
 - **Log streaming (follow)** with a toggle to a crashed container's *previous* logs, and an in-pane **grep** (`/`).
 - **Multi-pod tail** (`L`): follow many pods in one pane — the marked rows, or every pod the current filter shows. Each line is prefixed with its pod name in its own colour, and `/` greps pod names as well as line text.
 - **Interactive exec shell** into a container (auto-fallback `bash` → `sh`).
-- **Live CPU/MEM graphs** (sparklines) for pods and nodes.
+- **Live CPU/MEM graphs** (sparklines) for pods and nodes — drawn **inside the focused pane**, so with a split open the other panes keep updating beside the chart.
 - **HTTP benchmark** (`b`, view `B`): load-test a Pod, Service, or Ingress from inside kcli — requests/s, latency percentiles (p50/p90/p95/p99), status-code and error breakdowns, and a latency histogram. Pods and Services are reached through an ephemeral port-forward; an Ingress is hit directly, so it measures the real ingress path.
 - **Actions**: describe (YAML + events), edit YAML in `$EDITOR`, scale, rollout restart, **rollout undo**, delete, cordon/uncordon & drain nodes, **reveal secret** values, port-forward (pods *and* services).
 - **Filter** (any-column substring) & **sort** by column (duration- and number-aware).
@@ -178,7 +178,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 | `L`                 | Tail many pods at once (marked rows, else every visible row)     |
 | `e`                 | Interactive exec shell                                          |
 | `E`                 | Edit YAML in `$EDITOR` and apply on save                        |
-| `g`                 | Live CPU/MEM graph                                              |
+| `g`                 | Live CPU/MEM graph (in the focused pane)                        |
 | `s`                 | Scale (change replica count)                                    |
 | `R`                 | Rollout restart                                                 |
 | `u`                 | Rollout undo (roll back to the previous revision)              |
@@ -221,6 +221,7 @@ On launch, kcli shows Pods across all namespaces. Switch resources with the numb
 - **Dynamic / CRD view**: read-only. Generic NAMESPACE/NAME/AGE columns with full YAML detail on `Enter`. `Tab`, another `:`, or `q` leaves it (it is not in the numbered tab bar).
 - **Workspaces** (`:ws`): `:ws save [name]` snapshots the layout, `:ws load [name]` restores it, `:ws rm [name]` deletes one, `:ws list` (or a bare `:ws`) shows what is saved; the name defaults to `default`, which is also the one restored automatically at startup — saving under it is how you opt in. Quitting overwrites the `last` slot. Only the *shape* of a session is stored (resource, namespace, filter, sort, tab name, split); rows always reload from the cluster. A tab parked on a CRD stores its GVR, so it comes back without another discovery lookup. Tabs whose resource no longer exists are skipped, and a stored split is only restored if it still describes 2–4 distinct, existing tabs. The file is `workspaces.yaml`, beside `config.yaml`.
 - **Split view** (`|`, `-`, `+`, `\`, `_`): a layout over the tabs, not a second kind of session — each pane shows one tab, two to four of them. `|` and `-` open two panes and each further press adds one (a fourth press unsplits); `+` opens a 2×2 quad straight away and fills rows two at a time, so three panes leave the last one full width. Splitting with fewer tabs than panes clones the current session to fill them. The focused pane is the live one (accent border); the others are greyed and read-only until you `\` into them (focus cycles round), and all of them reload on the same refresh tick. Every other key (filter, sort, actions, view switch) applies to the focused pane only. `_` closes the focused pane but keeps its tab open; closing tabs (`w`) below the pane count sheds panes, and down to one tab it unsplits automatically.
+- **Graph** (`g`): CPU and MEM line charts sampled every 2s over a 60-sample window, for a pod or a node (nodes also show % of capacity). It renders in the focused pane rather than over the whole screen — the header, tab bars, footer and any other split panes stay visible and live, so a chart can sit beside a Pods list. While it is open `\` still moves the focus to the next pane (the chart stays put, so you can drive a neighbouring list while watching it); its border greys when another pane is focused, like any parked pane. It **persists** while you change another pane's resource or switch tabs — the chart is about a pod, not a page, so its history keeps building. `q`/`esc` closes it; a change to the chart's *own* pane (its view, or a split/pane-count change) closes it and runs. A context switch closes it too (the pod belongs to the old cluster).
 - **Logs**: follows the last 500 lines by default. Press `p` to switch to the **previous** container instance's logs (useful for `CrashLoopBackOff`), and `/` to **grep** the buffer (filters in place, keeps following).
 - **Multi-pod tail** (`L`): one pane, one follow stream per pod, capped at 20 pods (the extras are dropped and the title says so, e.g. `tail: 20 of 29 pods`). Targets are the marked rows when any are marked, otherwise every row the filter leaves on screen — so `/nginx` then `L` tails a whole deployment. Each pod gets a coloured name prefix (`ns/name` when the tail spans namespaces); the pane's `/` grep matches the prefix as well as the line, so it can narrow back to a single pod. Follows the first regular container of each pod, like `kubectl logs` with no `-c`.
 - **Exec**: the TUI is *suspended* and the terminal is handed to the shell; it resumes automatically when the shell exits. Multi-container pods show a container picker (init containers first).
@@ -278,7 +279,7 @@ multilog.go      multi-pod tail (fan-out streams, coloured pod prefixes, grep)
 dynamic.go       jumpToView / jumpDynamic / setDynamicView (generic CRD view)
 help.go          the `?` help overlay
 edit.go          edit YAML in $EDITOR and apply
-graph.go         sampler + CPU/MEM sparkline rendering
+graph.go         sampler + CPU/MEM sparkline rendering (drawn in the live pane)
 splash.go        optional corner GIF animation (quadrant-block renderer + loop player)
 exec.go          suspend TUI → exec → resume
 portforward.go   port-forward state + the built-in Port-Fwd view (pods & services)

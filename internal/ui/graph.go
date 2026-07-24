@@ -28,17 +28,35 @@ func (a *App) showGraph() {
 	}
 
 	view := tview.NewTextView().SetDynamicColors(true).SetWrap(false)
-	view.SetBorder(true).SetTitle(fmt.Sprintf(" graph: %s %s/%s (every %s) ", kind, ns, name, graphInterval))
+	// Accent border, like a focused pane: while split, the chart sits in one pane
+	// beside the others and should read as the one the keys are driving.
+	accent := accentColor(a.accent)
+	view.SetBorder(true).
+		SetTitle(fmt.Sprintf(" graph: %s %s/%s (every %s) ", kind, ns, name, graphInterval)).
+		SetTitleColor(accent).SetBorderColor(accent)
 	view.SetText("sampling…")
 	view.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
-		if e.Key() == tcell.KeyEscape || e.Rune() == 'q' {
-			a.stopGraph()
-			a.closeModal("graph")
+		switch {
+		case e.Key() == tcell.KeyEscape || e.Rune() == 'q':
+			a.closePaneOverlay() // stops the sampler too
+			return nil
+		case e.Rune() == '\\':
+			// Move the focus to the next pane but keep the chart open in its own —
+			// the whole point of drawing it in a pane is to watch it beside a list.
+			a.focusNextPane()
+			return nil
+		case e.Key() == tcell.KeyRune || e.Key() == tcell.KeyTab || e.Key() == tcell.KeyBacktab:
+			// Any other command key leaves the graph: close it, then run the key as
+			// if it had been pressed on the table (a view switch, a split change, …).
+			a.closePaneOverlay()
+			a.onTableKey(e)
 			return nil
 		}
-		return e
+		return nil // swallow the rest (arrows etc.) so a stray key can't dismiss it
 	})
-	a.openModalFull("graph", view)
+	// In the pane, not over the whole screen: the chart is a monitor, so the
+	// header, tab bars and any other split panes stay useful beside it.
+	a.openPaneOverlay(view)
 
 	stop := make(chan struct{})
 	a.graphStop = stop

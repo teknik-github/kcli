@@ -101,6 +101,12 @@ func (a *App) loadTab(i int) {
 	if t.selRow > 0 {
 		a.table.Select(t.selRow, 0)
 	}
+	// With a graph pinned to a pane, a tab switch may leave the focus on the wrong
+	// widget (fixPanes only rebuilds when the pane order moved). Re-aim it so keys
+	// reach the focused pane's table — or the graph, if this landed on its pane.
+	if a.paneOverlay != nil {
+		a.tv.SetFocus(a.focusTarget())
+	}
 	go a.refresh()
 }
 
@@ -136,6 +142,7 @@ func (a *App) closeTab() {
 	if len(a.tabList) <= 1 {
 		return
 	}
+	a.closePaneOverlay()
 	i := a.activeTab
 	a.tabList = append(a.tabList[:i], a.tabList[i+1:]...)
 	// Removing a tab shifts every later index: fix up what the panes point at
@@ -155,6 +162,9 @@ func (a *App) closeTab() {
 }
 
 // nextTab / prevTab cycle with wraparound; gotoTab jumps to tab n (0-based).
+// Tab switches keep an open graph: it is pinned to a pane position, and none of
+// these change the pane count, so its pane survives. The chart is about a pod,
+// not a tab, so it stays consistent while you move between the other tabs.
 func (a *App) nextTab() {
 	if len(a.tabList) < 2 {
 		return

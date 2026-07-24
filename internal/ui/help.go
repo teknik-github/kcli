@@ -48,7 +48,7 @@ func (a *App) showHelp() {
 		{"L", "tail many pods at once (marked rows, else all visible)"},
 		{"e", "exec shell"},
 		{"E", "edit YAML in $EDITOR and apply"},
-		{"g", "live CPU/MEM graph"},
+		{"g", "live CPU/MEM graph in the focused pane (\\ keeps it, moves focus)"},
 		{"f", "port-forward (pods and services)"},
 		{"F", "open the Port-Fwd view (enter: live log, d: stop)"},
 		{"b", "HTTP benchmark (pods, services, ingresses)"},

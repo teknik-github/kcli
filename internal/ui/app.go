@@ -52,6 +52,15 @@ type App struct {
 	paneTabs   [maxPanes]int
 	paneTable  [maxPanes]*tview.Table
 
+	// paneOverlay temporarily takes one pane's slot in the layout. Panels that
+	// belong *beside* the rest of the screen rather than over it — the live graph
+	// — go here instead of on the modal Pages, so the header, tab bars and any
+	// other split panes stay visible. overlayPane is the pane position it sits in;
+	// it stays put while `\` moves the focus across the other panes, so the graph
+	// can be watched next to a live list.
+	paneOverlay tview.Primitive
+	overlayPane int
+
 	viewIdx     int    // index into resourceViews
 	prevViewIdx int    // view to return to when leaving a hidden (Local) view
 	namespace   string // "" means all namespaces
@@ -339,6 +348,10 @@ func (a *App) switchView(i int) {
 	if i < 0 || i >= len(resourceViews) || i == a.viewIdx {
 		return
 	}
+	// A view switch changes the *focused* pane's content. It must not disturb a
+	// graph pinned to another pane — that pane, and its chart, are untouched. When
+	// the focused pane IS the graph's, the key came through the graph's own
+	// capture, which already closed the overlay before dispatching here.
 	a.viewIdx = i
 	a.rows = nil
 	a.filter = ""  // filter is per-view; a Services filter must not hide Port-Fwd rows

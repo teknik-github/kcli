@@ -103,7 +103,8 @@ func (a *App) switchContext(name string) {
 		a.showMessage("context", fmt.Sprintf("error: %v", err))
 		return
 	}
-	a.client.Stop() // tear down the old cluster's informers/watches
+	a.closePaneOverlay() // a graph samples the old cluster's pod; it can't follow
+	a.client.Stop()      // tear down the old cluster's informers/watches
 	nc.SetOnChange(a.onChange)
 	a.client = nc
 	a.clientGen++

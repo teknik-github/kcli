@@ -52,6 +52,7 @@ func (a *App) snapshotWorkspace() config.Workspace {
 // whose resource no longer exists are dropped; if nothing survives, the current
 // session is kept. Runs on the UI goroutine (or before Run, at startup).
 func (a *App) applyWorkspace(ws config.Workspace) bool {
+	a.closePaneOverlay() // the tab list is about to be replaced wholesale
 	tabs := make([]*tabState, 0, len(ws.Tabs))
 	for _, st := range ws.Tabs {
 		t := a.tabFromSaved(st)
